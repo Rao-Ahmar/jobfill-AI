@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+server/node_modules/
+
+# Environment Variables & Secrets (CRITICAL)
+.env
+server/.env
+.env.*
+!.env.example
+server/!.env.example
+
+# Build Outputs (WXT & Vite)
+.output/
+.wxt/
+dist/
+build/
+
+# System & OS Files
+.DS_Store
+Thumbs.db
+
+# IDE Folders
+.vscode/
+.idea/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

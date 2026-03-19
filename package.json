@@ -1,0 +1,27 @@
+{
+  "name": "jobfill-ai",
+  "version": "1.0.0",
+  "description": "Anti-Ghosting Job Application Assistant",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build",
+    "build:firefox": "wxt build -b firefox",
+    "postinstall": "wxt prepare"
+  },
+  "dependencies": {
+    "lucide-react": "latest",
+    "pdfjs-dist": "^4.0.0",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  },
+  "devDependencies": {
+    "@wxt-dev/module-react": "latest",
+    "autoprefixer": "latest",
+    "postcss": "latest",
+    "tailwindcss": "^3.0.0",
+    "wxt": "latest"
+  }
+}
