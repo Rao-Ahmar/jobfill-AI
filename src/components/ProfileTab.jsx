@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useStorage } from '@/hooks/useStorage';
+import { useSubscription } from '@/hooks/useSubscription';
+import { PLAN_LIMITS, PLAN_LABELS } from '@/config/plans';
 import { Toast } from './Toast';
 import { generateAutoFillMapping } from '@/utils/claudeApi';
-import { Wand2, RefreshCw } from 'lucide-react';
+import { Wand2, RefreshCw, Crown, ArrowUp } from 'lucide-react';
 
 const defaultProfile = {
   fullName: '',
@@ -18,7 +20,8 @@ const defaultProfile = {
   education: ''
 };
 
-export function ProfileTab() {
+export function ProfileTab({ onNavigate }) {
+  const { plan, canUseFeature, incrementUsage, usage } = useSubscription();
   const [storedProfile, setStoredProfile, loading] = useStorage('jobfill_profile', defaultProfile);
   const [resumeText] = useStorage('jobfill_resume_text', '');
   const [customFields, setCustomFields] = useStorage('jobfill_custom_fields', {});
@@ -43,14 +46,22 @@ export function ProfileTab() {
     setTimeout(() => setToast({ visible: false, message: '' }), 3000);
   };
 
+  const autofillCheck = canUseFeature('autofill');
+  const limits = PLAN_LIMITS[plan] || PLAN_LIMITS.free;
+
   const handleAutoFill = async () => {
+    if (!autofillCheck.allowed) {
+      onNavigate?.('pro');
+      return;
+    }
+
     setIsAutofilling(true);
     setToast({ visible: true, message: 'Scanning page...' });
-    
+
     try {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tabs[0]) throw new Error("No active tab found");
-      
+
       const scanResponse = await chrome.tabs.sendMessage(tabs[0].id, { action: 'SCAN_FORM' }).catch(() => null);
       if (!scanResponse?.fields || scanResponse.fields.length === 0) {
         throw new Error("No form fields detected on this page.");
@@ -58,24 +69,34 @@ export function ProfileTab() {
 
       setToast({ visible: true, message: 'AI Mapping Fields...' });
       const { mapping, missingFields } = await generateAutoFillMapping(profile, customFields, resumeText, scanResponse.fields);
-      
+
       if (missingFields && missingFields.length > 0) {
-         setCustomFields(prev => {
-           let updated = { ...prev };
-           let added = false;
-           missingFields.forEach(f => {
-             if (updated[f] === undefined) { updated[f] = ''; added = true; }
-           });
-           if (added) {
-              setTimeout(() => setToast({ visible: true, message: 'New fields added to your profile! ✨' }), 3000);
-           }
-           return updated;
-         });
+        // Enforce custom fields limit
+        const maxCustom = limits.customFields;
+        setCustomFields(prev => {
+          let updated = { ...prev };
+          let added = false;
+          const currentCount = Object.keys(updated).length;
+          missingFields.forEach(f => {
+            if (updated[f] === undefined) {
+              if (maxCustom === Infinity || currentCount + (added ? 1 : 0) < maxCustom) {
+                updated[f] = '';
+                added = true;
+              }
+            }
+          });
+          if (added) {
+            setTimeout(() => setToast({ visible: true, message: 'New fields added to your profile! ✨' }), 3000);
+          }
+          return updated;
+        });
       }
-      
+
       setToast({ visible: true, message: 'Filling Form...' });
       await chrome.tabs.sendMessage(tabs[0].id, { action: 'FILL_FORM', mapping });
-      
+
+      await incrementUsage('autofill');
+
       setToast({ visible: true, message: 'Application Auto-Filled ✨' });
     } catch (err) {
       console.error(err);
@@ -88,25 +109,64 @@ export function ProfileTab() {
 
   if (loading) return <div className="p-4 text-center text-textSecondary">Loading profile...</div>;
 
+  // Build usage banner info
+  const showUpgradeBanner = !autofillCheck.allowed;
+  const remaining = autofillCheck.remaining;
+  const limit = autofillCheck.limit;
+
   return (
     <div className="p-4 pb-20 fade-in h-[calc(100vh-64px)] overflow-y-auto scrollbar-custom">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold">Your Profile</h1>
         <div className="flex gap-2">
-          <button 
-            onClick={handleAutoFill} 
-            disabled={isAutofilling}
-            className="flex items-center gap-1 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white text-sm font-medium py-1.5 px-3 rounded-md transition-colors"
-          >
-            {isAutofilling ? <RefreshCw size={14} className="animate-spin" /> : <Wand2 size={14} />}
-            Auto-Fill
-          </button>
+          {showUpgradeBanner ? (
+            <button
+              onClick={() => onNavigate?.('pro')}
+              className="flex items-center gap-1 bg-gradient-to-r from-yellow-500 to-orange-600 hover:from-yellow-600 hover:to-orange-700 text-white text-sm font-bold py-1.5 px-3 rounded-md transition-all shadow-lg shadow-orange-900/20 active:scale-95"
+            >
+              <Crown size={14} />
+              Upgrade
+            </button>
+          ) : (
+            <button
+              onClick={handleAutoFill}
+              disabled={isAutofilling}
+              className="flex items-center gap-1 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white text-sm font-medium py-1.5 px-3 rounded-md transition-colors"
+            >
+              {isAutofilling ? <RefreshCw size={14} className="animate-spin" /> : <Wand2 size={14} />}
+              Auto-Fill
+              {remaining !== Infinity && (
+                <span className="ml-1 text-[10px] opacity-80">({remaining})</span>
+              )}
+            </button>
+          )}
           <button onClick={handleSave} className="bg-primary hover:bg-indigo-600 text-white text-sm font-medium py-1.5 px-3 rounded-md transition-colors">
             Save
           </button>
         </div>
       </div>
-      
+
+      {showUpgradeBanner && (
+        <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-amber-500 flex items-center justify-center shrink-0">
+            {autofillCheck.reason === 'limit' ? <ArrowUp size={18} className="text-white" /> : <Crown size={18} className="text-white" />}
+          </div>
+          <p className="text-[11px] text-amber-200 leading-tight">
+            {autofillCheck.reason === 'limit' ? (
+              <>
+                You've used all {autofillCheck.limit} auto-fills this month ({PLAN_LABELS[plan]}).{' '}
+                <button onClick={() => onNavigate?.('pro')} className="font-bold underline">Upgrade</button> for more.
+              </>
+            ) : (
+              <>
+                You've used your 3 free fills!{' '}
+                <button onClick={() => onNavigate?.('pro')} className="font-bold underline">Choose a plan</button> to continue.
+              </>
+            )}
+          </p>
+        </div>
+      )}
+
       <div className="space-y-4">
         <div className="card-container space-y-4">
           <h2 className="text-sm border-b border-border pb-2 font-medium">Basic Info</h2>
@@ -184,7 +244,14 @@ export function ProfileTab() {
 
         {customFields && Object.keys(customFields).length > 0 && (
           <div className="card-container space-y-4 border-l-4 border-indigo-500">
-            <h2 className="text-sm border-b border-border pb-2 font-medium text-indigo-400">Custom Fields (Auto-Learned)</h2>
+            <div className="flex items-center justify-between border-b border-border pb-2">
+              <h2 className="text-sm font-medium text-indigo-400">Custom Fields (Auto-Learned)</h2>
+              {limits.customFields !== Infinity && (
+                <span className="text-[10px] text-textSecondary">
+                  {Object.keys(customFields).length}/{limits.customFields} max
+                </span>
+              )}
+            </div>
             <div className="space-y-3">
               {Object.keys(customFields).map(key => (
                 <div key={key}>
@@ -192,7 +259,7 @@ export function ProfileTab() {
                   <input
                     value={customFields[key] || ''}
                     onChange={(e) => setCustomFields({ ...customFields, [key]: e.target.value })}
-                    className="input-field py-1.5 text-sm" 
+                    className="input-field py-1.5 text-sm"
                   />
                 </div>
               ))}

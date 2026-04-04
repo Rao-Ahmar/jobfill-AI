@@ -31,12 +31,14 @@ Please write the cover letter now. Ensure it is exactly 3 paragraphs. Only retur
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.json().catch(() => ({}));
       throw new Error(errorData.error || "Failed to generate cover letter.");
     }
 
     const data = await response.json();
-    return data.content[0].text;
+    const text = data?.content?.[0]?.text;
+    if (!text) throw new Error("No response from AI. Please try again.");
+    return text;
   } catch (err) {
     console.error("Cover letter generation error:", err);
     throw err;
@@ -44,15 +46,25 @@ Please write the cover letter now. Ensure it is exactly 3 paragraphs. Only retur
 }
 
 export async function analyzeKeywords(profile, resumeText, jobDescription) {
-  const systemPrompt = `You are an expert ATS optimizer. 
-Extract top 10 ATS keywords from the job description. 
-For each keyword, check if it logically exists in the provided profile/resume.
-If missing, suggest a short, natural rewrite to add it to their experience bullet points.
-Return exactly and only a JSON object in this format: 
+  const systemPrompt = `You are an expert ATS optimizer.
+Extract top 10 ATS keywords from the job description.
+For each keyword:
+- Check if it logically exists in the provided profile/resume.
+- Assign an "importance" level: "high", "medium", or "low" based on how critical this keyword is for the role.
+- Assign a "matchScore" from 0 to 100: 0 = completely absent, 50 = partially demonstrated, 100 = strongly demonstrated in the resume.
+- If missing or weak, suggest a short, natural rewrite to add it to their experience bullet points.
+
+Also provide:
+- "overallScore": a weighted 0-100 overall match percentage (high-importance keywords count more).
+- "summary": a one-line verdict (e.g. "Strong match — missing 2 critical skills").
+
+Return exactly and only a JSON object in this format:
 {
+  "overallScore": 72,
+  "summary": "Strong match — consider adding cloud experience",
   "results": [
-    { "keyword": "React", "foundInResume": true, "suggestedRewrite": "" },
-    { "keyword": "GraphQL", "foundInResume": false, "suggestedRewrite": "Added GraphQL to data fetching layer..." }
+    { "keyword": "React", "foundInResume": true, "matchScore": 95, "importance": "high", "suggestedRewrite": "" },
+    { "keyword": "GraphQL", "foundInResume": false, "matchScore": 0, "importance": "medium", "suggestedRewrite": "Added GraphQL to data fetching layer..." }
   ]
 }
 Do not include markdown codeblocks (\`\`\`json) in your response, just the raw JSON.`;
@@ -76,26 +88,51 @@ ${jobDescription}
       },
       body: JSON.stringify({
         model: "claude-3-5-sonnet-20241022",
-        max_tokens: 1500,
+        max_tokens: 4096,
         system: systemPrompt,
         prompt: userPrompt,
       }),
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.json().catch(() => ({}));
       throw new Error(errorData.error || "Failed to analyze keywords.");
     }
 
     const data = await response.json();
-    let text = data.content[0].text;
-    
-    if (text.startsWith('\`\`\`json')) {
-      text = text.replace(/\`\`\`json/g, '').replace(/\`\`\`/g, '').trim();
+    let text = data?.content?.[0]?.text;
+
+    if (!text) {
+      throw new Error("No response from AI. Please try again.");
     }
-    
-    const parsed = JSON.parse(text);
-    return parsed.results || [];
+
+    // Strip markdown code blocks if present
+    if (text.startsWith('\`\`\`')) {
+      text = text.replace(/\`\`\`json\s*/gi, '').replace(/\`\`\`/g, '').trim();
+    }
+
+    // Extract JSON object if surrounded by extra text
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      text = jsonMatch[0];
+    }
+
+    try {
+      const parsed = JSON.parse(text);
+      const results = Array.isArray(parsed.results || parsed.keywords)
+        ? (parsed.results || parsed.keywords)
+        : [];
+      const overallScore = typeof parsed.overallScore === 'number'
+        ? Math.max(0, Math.min(100, parsed.overallScore))
+        : 0;
+      const summary = typeof parsed.summary === 'string'
+        ? parsed.summary
+        : '';
+      return { overallScore, summary, results };
+    } catch (parseError) {
+      console.error("Failed to parse AI JSON response:", text);
+      throw new Error("AI returned malformed response. Please try again.");
+    }
   } catch (err) {
     console.error("Keyword analysis error:", err);
     throw err;
@@ -103,28 +140,32 @@ ${jobDescription}
 }
 
 export async function generateAutoFillMapping(profile, customFields, resumeText, formFields) {
-  const systemPrompt = `You are an expert job application autofill AI.
-You will receive a user's Profile Data, Custom Profile Answers, Resume Text, and a list of Form Fields extracted from a job application page.
-Your task is to:
-1. Accurately map the user's data to the form fields.
-2. Identify any requested form fields where the profile/resume clearly DOES NOT contain the answer, and output their labels in a 'missingFields' array so the user can answer them for next time.
+  const systemPrompt = `You are the job applicant. You are filling out a real job application form.
+You receive your Profile, Custom Answers, Resume, and a list of Form Fields (each has an "id", "label", "type", and sometimes "options").
 
-Return exactly and only a JSON object matching this structure:
+ABSOLUTE RULES — FOLLOW ALL OF THEM:
+
+1. YOU MUST FILL EVERY SINGLE FIELD. Zero exceptions. Never leave a value as "".
+2. The KEY in your "mapping" object MUST be the exact "id" value from each Form Field. Never use the label as the key.
+3. For factual fields (name, email, phone, address, education, work experience) → use exact data from Profile/Resume.
+4. For open-ended or subjective questions (e.g. "What are you most proud of?", "Why us?", "Describe yourself", "Your interest", "What was your manager like?") → Write a genuine first-person answer using your resume achievements. Sound human, casual, authentic. 2-4 sentences.
+5. For consent/agreement/confirmation/policy questions (e.g. "I consent to...", "Are you prepared to...", "Please confirm...", "I pledge to...", "Working hours are 9-6, confirm") → ALWAYS answer with a clear affirmative like "Yes, I confirm and agree" or "Yes, I'm fully prepared and committed to this" or "Absolutely, I agree to these terms." Make it sound natural and human.
+6. For dropdown/select fields with "options" → pick the BEST matching option text exactly as provided.
+7. For checkbox/radio → answer "Yes" or the appropriate option.
+8. Only add to "missingFields" if it asks for very specific private numerical data (exact salary number, government ID, bank details). Questions about agreements, confirmations, or opinions are NEVER missing — answer them.
+9. Use 'customFields' answers when they match a field.
+
+OUTPUT FORMAT — strict JSON only:
 {
   "mapping": {
-    "field_id_1": "John Doe",
-    "field_id_2": "john@example.com"
+    "actual_field_id_1": "John Doe",
+    "actual_field_id_2": "Yes, I fully agree and confirm.",
+    "actual_field_id_3": "Honestly, leading the product redesign at my last company was huge for me. We improved user retention by 40% and I got to mentor two junior devs through the process."
   },
-  "missingFields": [
-    "Do you require Visa Sponsorship?",
-    "Desired Salary"
-  ]
+  "missingFields": ["Expected Salary Amount"]
 }
 
-Where the key in "mapping" is exactly the 'id' (or 'name'/'label' if id is missing) provided in the Form Fields list.
-If a field asks for something you don't know, leave its value as "" in "mapping", AND add its label to "missingFields".
-Use 'customFields' answers to fill fields.
-CRITICAL: You must output STRICT, VALID JSON ONLY. Do NOT wrap it in markdown codeblocks. Escape all inner quotes and newlines accurately.`;
+CRITICAL: Output ONLY valid JSON. No markdown. No codeblocks. Escape quotes and newlines properly.`;
 
   const userPrompt = `
 Profile Data:
