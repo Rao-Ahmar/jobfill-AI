@@ -6,8 +6,8 @@ import { generateCoverLetter } from '@/utils/claudeApi';
 import { RefreshCw, Copy, CheckCircle2, PenLine, Crown, Lock, ArrowUp } from 'lucide-react';
 import { Toast } from './Toast';
 
-export function CoverLetterTab({ onNavigate }) {
-  const { canUseFeature, incrementUsage, plan, daysUntilReset } = useSubscription();
+export function CoverLetterTab() {
+  const { canUseFeature, incrementUsage, plan, daysUntilReset, userEmail, syncServerUsage, openWebsite } = useSubscription();
   const [profile] = useStorage('jobfill_profile', {});
   const [resumeText] = useStorage('jobfill_resume_text', '');
   const [savedCoverLetter, setSavedCoverLetter] = useStorage('jobfill_cover_letter', '');
@@ -26,7 +26,7 @@ export function CoverLetterTab({ onNavigate }) {
 
   const handleGenerate = async () => {
     if (!check.allowed) {
-      onNavigate?.('pro');
+      openWebsite();
       return;
     }
 
@@ -35,11 +35,17 @@ export function CoverLetterTab({ onNavigate }) {
       return;
     }
 
+    const email = userEmail || profile?.email;
+
     setIsGenerating(true);
     try {
-      const generated = await generateCoverLetter(profile, resumeText, jobDescription);
-      await setSavedCoverLetter(generated);
-      await incrementUsage('coverletter');
+      const result = await generateCoverLetter(profile, resumeText, jobDescription, email);
+      await setSavedCoverLetter(result.text);
+      if (result._serverUsage) {
+        await syncServerUsage({ plan: undefined, usage: result._serverUsage, resetDate: result._serverUsage.resetDate });
+      } else {
+        await incrementUsage('coverletter');
+      }
       showToast('Cover Letter Generated ✓');
       setCopied(false);
     } catch (error) {
@@ -81,7 +87,7 @@ export function CoverLetterTab({ onNavigate }) {
           </div>
           <p className="text-[11px] text-indigo-200 leading-tight">
             Requires {PLAN_LABELS[check.upgradeTarget]}.{' '}
-            <button onClick={() => onNavigate?.('pro')} className="font-bold underline">Upgrade</button> to unlock AI cover letters.
+            <button onClick={openWebsite} className="font-bold underline">Upgrade</button> to unlock AI cover letters.
           </p>
         </div>
       );
@@ -95,7 +101,7 @@ export function CoverLetterTab({ onNavigate }) {
           </div>
           <p className="text-[11px] text-amber-200 leading-tight">
             {check.used}/{check.limit} used this month. Resets in {daysUntilReset} days.{' '}
-            <button onClick={() => onNavigate?.('pro')} className="font-bold underline">Upgrade</button> for more.
+            <button onClick={openWebsite} className="font-bold underline">Upgrade</button> for more.
           </p>
         </div>
       );

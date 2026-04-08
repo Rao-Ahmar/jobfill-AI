@@ -11,7 +11,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('profile');
 
   return (
-    <div className="w-[420px] h-[580px] bg-background text-textPrimary relative flex flex-col overflow-hidden">
+    <div className="w-full h-screen bg-background text-textPrimary relative flex flex-col overflow-hidden animate-slideIn">
       <main className="flex-1 overflow-hidden relative">
 
         {activeTab === 'profile' && <ProfileTab />}

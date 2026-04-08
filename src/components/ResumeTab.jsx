@@ -6,8 +6,8 @@ import { parsePdfToBase64, extractTextFromPdf } from '@/utils/resumeParser';
 import { UploadCloud, FileText, CheckCircle2, Trash2, Send, Crown, Lock } from 'lucide-react';
 import { Toast } from './Toast';
 
-export function ResumeTab({ onNavigate }) {
-  const { canUseFeature, incrementUsage } = useSubscription();
+export function ResumeTab() {
+  const { canUseFeature, incrementUsage, userEmail, openWebsite } = useSubscription();
   const [resumeBase64, setResumeBase64, loadingBase64] = useStorage('jobfill_resume_base64', null);
   const [resumeText, setResumeText, loadingText] = useStorage('jobfill_resume_text', null);
   const [resumeMeta, setResumeMeta, loadingMeta] = useStorage('jobfill_resume_meta', null);
@@ -69,7 +69,7 @@ export function ResumeTab({ onNavigate }) {
 
   const handleAttach = async () => {
     if (!attachCheck.allowed) {
-      onNavigate?.('pro');
+      openWebsite();
       return;
     }
 
@@ -110,7 +110,7 @@ export function ResumeTab({ onNavigate }) {
           </div>
           <p className="text-[11px] text-indigo-200 leading-tight">
             Auto-attach requires {PLAN_LABELS[attachCheck.upgradeTarget]}.{' '}
-            <button onClick={() => onNavigate?.('pro')} className="font-bold underline">Upgrade</button> to enable. Upload is free for all.
+            <button onClick={openWebsite} className="font-bold underline">Upgrade</button> to enable. Upload is free for all.
           </p>
         </div>
       )}
@@ -132,7 +132,7 @@ export function ResumeTab({ onNavigate }) {
           <div className="flex gap-2 pt-2">
             {!attachCheck.allowed ? (
               <button
-                onClick={() => onNavigate?.('pro')}
+                onClick={openWebsite}
                 className="flex-1 flex items-center justify-center gap-1.5 bg-gradient-to-r from-yellow-500 to-orange-600 hover:from-yellow-600 hover:to-orange-700 text-white text-sm font-bold py-2.5 rounded-lg transition-all shadow-lg shadow-orange-900/20 active:scale-95"
               >
                 <Crown size={16} />

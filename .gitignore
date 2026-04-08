@@ -23,6 +23,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# SQLite Database
+server/data/
+
 # Logs
 npm-debug.log*
 yarn-debug.log*

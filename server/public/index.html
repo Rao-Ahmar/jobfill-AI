@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JobFill AI — Autofill Job Applications with AI</title>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f0b1e 0%, #1a1145 50%, #0f0b1e 100%);
+      color: #fff;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Nav ── */
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 24px 24px 0;
+    }
+    .logo {
+      font-size: 20px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #818cf8, #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .nav-cta {
+      padding: 10px 22px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,.15);
+      background: rgba(255,255,255,.06);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background .2s;
+    }
+    .nav-cta:hover { background: rgba(255,255,255,.12); }
+
+    /* ── Hero ── */
+    .hero {
+      text-align: center;
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 100px 24px 80px;
+    }
+    .hero-badge {
+      display: inline-block;
+      padding: 6px 16px;
+      border-radius: 100px;
+      background: rgba(129,140,248,.15);
+      color: #a5b4fc;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 24px;
+      border: 1px solid rgba(129,140,248,.2);
+    }
+    .hero h1 {
+      font-size: clamp(36px, 5vw, 56px);
+      font-weight: 800;
+      line-height: 1.15;
+      margin-bottom: 20px;
+      background: linear-gradient(to right, #fff 30%, rgba(255,255,255,.7));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .hero p {
+      font-size: 18px;
+      color: rgba(255,255,255,.6);
+      max-width: 540px;
+      margin: 0 auto 36px;
+    }
+    .hero-cta {
+      display: inline-block;
+      padding: 14px 36px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: #fff;
+      font-size: 16px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      border: none;
+      transition: transform .15s, box-shadow .2s;
+      box-shadow: 0 4px 24px rgba(99,102,241,.35);
+    }
+    .hero-cta:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(99,102,241,.45); }
+    .hero-sub {
+      margin-top: 16px;
+      font-size: 13px;
+      color: rgba(255,255,255,.4);
+    }
+
+    /* ── Pricing ── */
+    .pricing {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 0 24px 100px;
+    }
+    .pricing-header {
+      text-align: center;
+      margin-bottom: 48px;
+    }
+    .pricing-header h2 {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+    .pricing-header p {
+      color: rgba(255,255,255,.5);
+      font-size: 16px;
+    }
+
+    /* Billing toggle */
+    .billing-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      margin-bottom: 40px;
+    }
+    .billing-toggle span {
+      font-size: 14px;
+      font-weight: 500;
+      color: rgba(255,255,255,.5);
+      transition: color .2s;
+    }
+    .billing-toggle span.active { color: #fff; }
+    .toggle-track {
+      width: 48px;
+      height: 26px;
+      border-radius: 13px;
+      background: rgba(255,255,255,.15);
+      cursor: pointer;
+      position: relative;
+      transition: background .2s;
+    }
+    .toggle-track.annual { background: rgba(139,92,246,.5); }
+    .toggle-knob {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #fff;
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      transition: transform .2s;
+    }
+    .toggle-track.annual .toggle-knob { transform: translateX(22px); }
+    .save-badge {
+      font-size: 12px;
+      font-weight: 600;
+      color: #a78bfa;
+      background: rgba(167,139,250,.15);
+      padding: 3px 10px;
+      border-radius: 100px;
+    }
+
+    /* Pricing sign-in */
+    .pricing-auth {
+      max-width: 420px;
+      margin: 0 auto 40px;
+      text-align: center;
+    }
+    .pricing-auth-hint {
+      font-size: 13px;
+      color: rgba(255,255,255,.4);
+      margin-top: 10px;
+    }
+    .pricing-signed-in {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 12px 20px;
+      border-radius: 12px;
+      background: rgba(129,140,248,.08);
+      border: 1px solid rgba(129,140,248,.2);
+    }
+    .pricing-signed-in.visible { display: flex; }
+    .pricing-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      object-fit: cover;
+    }
+    .pricing-email {
+      font-size: 14px;
+      color: rgba(255,255,255,.8);
+      font-weight: 500;
+    }
+
+    /* Cards grid */
+    .plans-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+      align-items: start;
+    }
+
+    .plan-card {
+      position: relative;
+      padding: 36px 28px;
+      border-radius: 20px;
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.1);
+      backdrop-filter: blur(20px);
+      transition: transform .2s, border-color .2s;
+    }
+    .plan-card:hover { transform: translateY(-4px); }
+    .plan-card.popular {
+      border-color: rgba(99,102,241,.4);
+      box-shadow: 0 0 60px rgba(99,102,241,.12);
+    }
+    .popular-badge {
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 4px 16px;
+      border-radius: 100px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .plan-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      margin-bottom: 16px;
+    }
+    .plan-card:nth-child(1) .plan-icon { background: rgba(96,165,250,.15); }
+    .plan-card:nth-child(2) .plan-icon { background: rgba(129,140,248,.15); }
+    .plan-card:nth-child(3) .plan-icon { background: rgba(167,139,250,.15); }
+
+    .plan-name {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .plan-desc {
+      font-size: 13px;
+      color: rgba(255,255,255,.45);
+      margin-bottom: 20px;
+    }
+
+    .plan-price {
+      font-size: 40px;
+      font-weight: 800;
+      margin-bottom: 2px;
+    }
+    .plan-price .currency { font-size: 22px; font-weight: 600; vertical-align: top; margin-right: 2px; }
+    .plan-price .period { font-size: 15px; font-weight: 400; color: rgba(255,255,255,.4); }
+    .annual-note {
+      font-size: 12px;
+      color: rgba(255,255,255,.35);
+      margin-bottom: 24px;
+      min-height: 18px;
+    }
+
+    .plan-btn {
+      display: block;
+      width: 100%;
+      padding: 13px;
+      border-radius: 12px;
+      border: none;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform .15s, box-shadow .2s;
+      margin-bottom: 24px;
+    }
+    .plan-btn:hover { transform: translateY(-1px); }
+    .plan-btn:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .plan-card:nth-child(1) .plan-btn {
+      background: rgba(96,165,250,.15);
+      color: #93c5fd;
+      border: 1px solid rgba(96,165,250,.25);
+    }
+    .plan-card:nth-child(1) .plan-btn:hover { background: rgba(96,165,250,.25); }
+    .plan-card:nth-child(2) .plan-btn {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: #fff;
+      box-shadow: 0 4px 20px rgba(99,102,241,.3);
+    }
+    .plan-card:nth-child(2) .plan-btn:hover { box-shadow: 0 8px 28px rgba(99,102,241,.4); }
+    .plan-card:nth-child(3) .plan-btn {
+      background: rgba(167,139,250,.15);
+      color: #c4b5fd;
+      border: 1px solid rgba(167,139,250,.25);
+    }
+    .plan-card:nth-child(3) .plan-btn:hover { background: rgba(167,139,250,.25); }
+
+    .features-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .features-list li {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      color: rgba(255,255,255,.7);
+    }
+    .features-list .check {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    .plan-card:nth-child(1) .check { background: rgba(96,165,250,.15); color: #60a5fa; }
+    .plan-card:nth-child(2) .check { background: rgba(129,140,248,.15); color: #818cf8; }
+    .plan-card:nth-child(3) .check { background: rgba(167,139,250,.15); color: #a78bfa; }
+
+    .signout-link {
+      font-size: 13px;
+      color: rgba(255,255,255,.4);
+      cursor: pointer;
+      background: none;
+      border: none;
+      text-decoration: underline;
+      transition: color .2s;
+    }
+    .signout-link:hover { color: rgba(255,255,255,.7); }
+
+    /* Current plan indicator on pricing cards */
+    .current-plan-badge {
+      position: absolute;
+      top: -12px;
+      right: 16px;
+      padding: 4px 14px;
+      border-radius: 100px;
+      background: linear-gradient(135deg, #22c55e, #16a34a);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+      white-space: nowrap;
+      color: #fff;
+    }
+    .plan-btn.current-plan {
+      background: rgba(74,222,128,.12) !important;
+      color: #4ade80 !important;
+      border: 1px solid rgba(74,222,128,.25) !important;
+      box-shadow: none !important;
+      cursor: default;
+    }
+
+    /* ── Nav plan badge ── */
+    .nav-plan {
+      display: none;
+      align-items: center;
+      gap: 10px;
+    }
+    .nav-plan.visible { display: flex; }
+    .nav-plan-badge {
+      padding: 5px 14px;
+      border-radius: 100px;
+      background: rgba(129,140,248,.12);
+      border: 1px solid rgba(129,140,248,.25);
+      font-size: 13px;
+      font-weight: 600;
+      color: #a5b4fc;
+    }
+    .nav-plan-badge.cancelled {
+      background: rgba(248,113,113,.1);
+      border-color: rgba(248,113,113,.2);
+      color: #f87171;
+    }
+    .nav-cancel-link {
+      font-size: 13px;
+      color: rgba(255,255,255,.35);
+      cursor: pointer;
+      background: none;
+      border: none;
+      text-decoration: underline;
+      transition: color .2s;
+      padding: 0;
+    }
+    .nav-cancel-link:hover { color: #f87171; }
+    .nav-cancel-link:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ── Footer ── */
+    footer {
+      text-align: center;
+      padding: 48px 24px;
+      border-top: 1px solid rgba(255,255,255,.06);
+    }
+    .footer-badges {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .footer-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: rgba(255,255,255,.4);
+    }
+    .footer-badge svg { width: 16px; height: 16px; }
+    footer p {
+      font-size: 13px;
+      color: rgba(255,255,255,.3);
+    }
+    footer a {
+      color: rgba(255,255,255,.5);
+      text-decoration: none;
+    }
+    footer a:hover { color: #fff; }
+
+    /* ── Error toast ── */
+    .toast {
+      position: fixed;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      padding: 14px 24px;
+      border-radius: 12px;
+      background: rgba(239,68,68,.9);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 500;
+      backdrop-filter: blur(12px);
+      transition: transform .3s ease;
+      z-index: 100;
+      max-width: 90vw;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+
+    /* ── Responsive ── */
+    @media (max-width: 860px) {
+      .plans-grid {
+        grid-template-columns: 1fr;
+        max-width: 420px;
+        margin: 0 auto;
+      }
+      .plan-card.popular { order: -1; }
+      .hero { padding: 72px 24px 60px; }
+    }
+  </style>
+</head>
+<body>
+
+  <nav>
+    <div class="logo">JobFill AI</div>
+    <div style="display:flex;gap:12px;align-items:center">
+      <div class="nav-plan" id="navPlan">
+        <span class="nav-plan-badge" id="navPlanBadge"></span>
+        <span id="navCancelWrap"><button class="nav-cancel-link" onclick="handleCancel()">Cancel</button></span>
+      </div>
+      <a href="#pricing" class="nav-cta">View Pricing</a>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-badge">Chrome Extension</div>
+    <h1>Autofill Job Applications in Seconds</h1>
+    <p>JobFill AI uses artificial intelligence to instantly fill out job application forms, generate tailored cover letters, and scan for ATS keyword matches.</p>
+    <a href="#pricing" class="hero-cta">Get Started</a>
+    <div class="hero-sub">Free tier available &middot; No credit card required</div>
+  </section>
+
+  <!-- Pricing -->
+  <section class="pricing" id="pricing">
+    <div class="pricing-header">
+      <h2>Simple, Transparent Pricing</h2>
+      <p>Choose the plan that fits your job search</p>
+    </div>
+
+    <div class="billing-toggle">
+      <span class="toggle-label active" data-billing="monthly">Monthly</span>
+      <div class="toggle-track" id="billingToggle">
+        <div class="toggle-knob"></div>
+      </div>
+      <span class="toggle-label" data-billing="annual">Annual</span>
+      <span class="save-badge">Save up to 36%</span>
+    </div>
+
+    <div class="pricing-auth">
+      <!-- Signed-out: Google button -->
+      <div id="pricingSignedOut">
+        <div id="pricingGoogleBtn" style="display:inline-block"></div>
+        <p class="pricing-auth-hint">Sign in with Google to subscribe</p>
+      </div>
+      <!-- Signed-in: show email -->
+      <div class="pricing-signed-in" id="pricingSignedIn">
+        <img class="pricing-avatar" id="pricingAvatar" src="" alt="">
+        <span class="pricing-email" id="pricingEmail"></span>
+        <button class="signout-link" onclick="handleSignOut()">Sign out</button>
+      </div>
+    </div>
+
+    <div class="plans-grid">
+      <!-- Starter -->
+      <div class="plan-card" data-plan="starter">
+        <div class="plan-icon">&#9889;</div>
+        <div class="plan-name">Starter</div>
+        <div class="plan-desc">For casual job seekers</div>
+        <div class="plan-price">
+          <span class="currency">$</span><span class="amount">9</span><span class="period">/mo</span>
+        </div>
+        <div class="annual-note"></div>
+        <button class="plan-btn" onclick="handleCheckout('starter')">Get Starter</button>
+        <ul class="features-list">
+          <li><span class="check">&#10003;</span> 50 auto-fills per month</li>
+          <li><span class="check">&#10003;</span> 5 custom profile fields</li>
+          <li><span class="check">&#10003;</span> Resume attachment</li>
+          <li><span class="check">&#10003;</span> Email support</li>
+        </ul>
+      </div>
+
+      <!-- Pro -->
+      <div class="plan-card popular" data-plan="pro">
+        <div class="popular-badge">Most Popular</div>
+        <div class="plan-icon">&#128640;</div>
+        <div class="plan-name">Pro</div>
+        <div class="plan-desc">For active job seekers</div>
+        <div class="plan-price">
+          <span class="currency">$</span><span class="amount">19</span><span class="period">/mo</span>
+        </div>
+        <div class="annual-note"></div>
+        <button class="plan-btn" onclick="handleCheckout('pro')">Go Pro</button>
+        <ul class="features-list">
+          <li><span class="check">&#10003;</span> 150 auto-fills per month</li>
+          <li><span class="check">&#10003;</span> 50 cover letters per month</li>
+          <li><span class="check">&#10003;</span> 50 ATS keyword scans</li>
+          <li><span class="check">&#10003;</span> Unlimited custom fields</li>
+        </ul>
+      </div>
+
+      <!-- Power -->
+      <div class="plan-card" data-plan="power">
+        <div class="plan-icon">&#9889;</div>
+        <div class="plan-name">Power</div>
+        <div class="plan-desc">For power applicants</div>
+        <div class="plan-price">
+          <span class="currency">$</span><span class="amount">39</span><span class="period">/mo</span>
+        </div>
+        <div class="annual-note"></div>
+        <button class="plan-btn" onclick="handleCheckout('power')">Go Power</button>
+        <ul class="features-list">
+          <li><span class="check">&#10003;</span> 500 auto-fills per month</li>
+          <li><span class="check">&#10003;</span> Unlimited cover letters</li>
+          <li><span class="check">&#10003;</span> Unlimited ATS scans</li>
+          <li><span class="check">&#10003;</span> Priority AI processing</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="footer-badges">
+      <span class="footer-badge">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        Secured by Stripe
+      </span>
+      <span class="footer-badge">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+        256-bit SSL Encryption
+      </span>
+    </div>
+    <p>&copy; 2025 JobFill AI. All rights reserved.</p>
+  </footer>
+
+  <!-- Error toast -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const prices = {
+      starter: { monthly: 9, annual: 79 },
+      pro:     { monthly: 19, annual: 149 },
+      power:   { monthly: 39, annual: 299 },
+    };
+
+    let billing = 'monthly';
+
+    // Billing toggle
+    const toggle = document.getElementById('billingToggle');
+    const labels = document.querySelectorAll('.toggle-label');
+
+    toggle.addEventListener('click', () => {
+      billing = billing === 'monthly' ? 'annual' : 'monthly';
+      toggle.classList.toggle('annual', billing === 'annual');
+      labels.forEach(l => l.classList.toggle('active', l.dataset.billing === billing));
+      updatePrices();
+    });
+
+    function updatePrices() {
+      document.querySelectorAll('.plan-card').forEach(card => {
+        const plan = card.dataset.plan;
+        const price = prices[plan];
+        const amount = card.querySelector('.amount');
+        const period = card.querySelector('.period');
+        const note = card.querySelector('.annual-note');
+
+        if (billing === 'annual') {
+          amount.textContent = Math.round(price.annual / 12);
+          period.textContent = '/mo';
+          note.textContent = `Billed $${price.annual}/year`;
+        } else {
+          amount.textContent = price.monthly;
+          period.textContent = '/mo';
+          note.textContent = '';
+        }
+      });
+    }
+
+    // Toast
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 4000);
+    }
+
+    // ── Shared Google Sign-In state ──
+    let googleCredential = null;
+    let signedInEmail = null;
+    let sessionToken = null;
+    let currentActivePlan = null; // track the user's active plan
+    let pendingCheckoutPlan = null; // queued plan when user clicks before signing in
+
+    // ── localStorage session helpers ──
+    function saveSession(data) {
+      try {
+        localStorage.setItem('jobfill_session', JSON.stringify({
+          sessionToken: data.sessionToken,
+          email: data.email,
+          name: data.name,
+          picture: data.picture,
+        }));
+      } catch (e) { /* storage full or disabled */ }
+    }
+
+    function loadSession() {
+      try {
+        const raw = localStorage.getItem('jobfill_session');
+        return raw ? JSON.parse(raw) : null;
+      } catch (e) { return null; }
+    }
+
+    function clearSession() {
+      try { localStorage.removeItem('jobfill_session'); } catch (e) {}
+    }
+
+    // ── Restore session on page load ──
+    async function restoreSession() {
+      const saved = loadSession();
+      if (!saved || !saved.sessionToken) return;
+
+      // Show signed-in UI immediately with cached info
+      signedInEmail = saved.email;
+      sessionToken = saved.sessionToken;
+      setSignedInUI({ email: saved.email, name: saved.name, picture: saved.picture });
+
+      // Validate token + fetch fresh subscription status from server
+      try {
+        const res = await fetch('/api/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionToken: saved.sessionToken }),
+        });
+
+        if (!res.ok) {
+          // Token expired or invalid — clear and reset
+          clearSession();
+          signedInEmail = null;
+          sessionToken = null;
+          resetSignedInUI();
+          return;
+        }
+
+        const data = await res.json();
+        signedInEmail = data.email;
+
+        if (data.status === 'active' && data.plan && data.plan !== 'free') {
+          updatePricingCards(data.plan);
+          updateManageSection(data);
+        } else if (data.status === 'cancelled') {
+          updateManageSection(data);
+        }
+
+      } catch (err) {
+        // Network error — keep cached UI but don't clear session
+        console.warn('Session restore fetch failed:', err);
+      }
+    }
+
+    // Original button labels (saved once, used to reset)
+    const originalBtnLabels = {};
+    document.querySelectorAll('.plan-card').forEach(card => {
+      const plan = card.dataset.plan;
+      const btn = card.querySelector('.plan-btn');
+      if (btn) originalBtnLabels[plan] = btn.textContent;
+    });
+
+    // Update both pricing + manage UIs to reflect signed-in state
+    function setSignedInUI(data) {
+      // Pricing section
+      document.getElementById('pricingSignedOut').style.display = 'none';
+      const pricingIn = document.getElementById('pricingSignedIn');
+      pricingIn.classList.add('visible');
+      document.getElementById('pricingAvatar').src = data.picture || '';
+      document.getElementById('pricingEmail').textContent = data.email;
+    }
+
+    // Update pricing cards to reflect current subscription
+    function updatePricingCards(activePlan) {
+      currentActivePlan = activePlan;
+      document.querySelectorAll('.plan-card').forEach(card => {
+        const plan = card.dataset.plan;
+        const btn = card.querySelector('.plan-btn');
+
+        // Remove any existing current-plan badge
+        const existingBadge = card.querySelector('.current-plan-badge');
+        if (existingBadge) existingBadge.remove();
+
+        if (activePlan && plan === activePlan) {
+          // This is the user's current plan
+          const badge = document.createElement('div');
+          badge.className = 'current-plan-badge';
+          badge.textContent = 'Current Plan';
+          card.appendChild(badge);
+
+          btn.textContent = 'Current Plan';
+          btn.disabled = true;
+          btn.classList.add('current-plan');
+        } else {
+          // Other plans — keep as-is (user can upgrade/downgrade)
+          btn.textContent = originalBtnLabels[plan] || `Get ${plan}`;
+          btn.disabled = false;
+          btn.classList.remove('current-plan');
+        }
+      });
+    }
+
+    function resetPricingCards() {
+      currentActivePlan = null;
+      document.querySelectorAll('.plan-card').forEach(card => {
+        const plan = card.dataset.plan;
+        const btn = card.querySelector('.plan-btn');
+        const existingBadge = card.querySelector('.current-plan-badge');
+        if (existingBadge) existingBadge.remove();
+        btn.textContent = originalBtnLabels[plan] || `Get ${plan}`;
+        btn.disabled = false;
+        btn.classList.remove('current-plan');
+      });
+    }
+
+    // ── Manage Subscription Section ──
+    const planDisplayNames = { starter: 'Starter', pro: 'Pro', power: 'Power' };
+
+    function updateManageSection(data) {
+      const navPlan = document.getElementById('navPlan');
+      const badge = document.getElementById('navPlanBadge');
+      const cancelWrap = document.getElementById('navCancelWrap');
+
+      if (!data || (data.status !== 'active' && data.status !== 'cancelled')) {
+        navPlan.classList.remove('visible');
+        return;
+      }
+
+      const displayPlan = data.plan && data.plan !== 'free'
+        ? data.plan
+        : currentActivePlan || data.plan;
+      const name = planDisplayNames[displayPlan] || displayPlan || '';
+
+      if (data.status === 'cancelled') {
+        const endDate = data.cancelAt || data.currentPeriodEnd;
+        const dateStr = endDate ? new Date(endDate).toLocaleDateString() : '';
+        badge.textContent = name + ' — Cancelled' + (dateStr ? ' (until ' + dateStr + ')' : '');
+        badge.classList.add('cancelled');
+        cancelWrap.innerHTML = '';
+      } else {
+        badge.textContent = name + ' Plan';
+        badge.classList.remove('cancelled');
+        cancelWrap.innerHTML = '<button class="nav-cancel-link" onclick="handleCancel()">Cancel</button>';
+      }
+
+      navPlan.classList.add('visible');
+    }
+
+    function hideManageSection() {
+      document.getElementById('navPlan').classList.remove('visible');
+    }
+
+    function resetSignedInUI() {
+      // Pricing section
+      document.getElementById('pricingSignedOut').style.display = '';
+      document.getElementById('pricingSignedIn').classList.remove('visible');
+      document.getElementById('pricingAvatar').src = '';
+      document.getElementById('pricingEmail').textContent = '';
+
+      // Reset pricing cards and hide manage section
+      resetPricingCards();
+      hideManageSection();
+    }
+
+    // Initialize Google Sign-In
+    async function initGoogleSignIn() {
+      try {
+        const res = await fetch('/api/config');
+        const { googleClientId } = await res.json();
+        if (!googleClientId) {
+          console.warn('GOOGLE_CLIENT_ID not configured');
+          return;
+        }
+
+        google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: handleGoogleSignIn,
+        });
+
+        // Render single Google Sign-In button in pricing section
+        google.accounts.id.renderButton(
+          document.getElementById('pricingGoogleBtn'),
+          { theme: 'outline', size: 'large', shape: 'pill', text: 'continue_with', width: 300 }
+        );
+      } catch (err) {
+        console.error('Failed to init Google Sign-In:', err);
+      }
+    }
+
+    // Restore session from localStorage, then init GSI
+    restoreSession();
+
+    if (typeof google !== 'undefined' && google.accounts) {
+      initGoogleSignIn();
+    } else {
+      window.addEventListener('load', () => {
+        const poll = setInterval(() => {
+          if (typeof google !== 'undefined' && google.accounts) {
+            clearInterval(poll);
+            initGoogleSignIn();
+          }
+        }, 100);
+        setTimeout(() => clearInterval(poll), 5000);
+      });
+    }
+
+    // Shared Google Sign-In callback
+    async function handleGoogleSignIn(response) {
+      googleCredential = response.credential;
+
+      // Show signed-in state immediately while we fetch subscription
+      // Decode JWT to get basic user info for instant UI update
+      const payload = JSON.parse(atob(response.credential.split('.')[1]));
+      signedInEmail = payload.email;
+      setSignedInUI({ email: payload.email, name: payload.name, picture: payload.picture });
+
+      // Fetch subscription status from server
+      try {
+        const res = await fetch('/api/auth/google', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ credential: googleCredential }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Authentication failed');
+
+        signedInEmail = data.email;
+        sessionToken = data.sessionToken;
+
+        // Persist session to localStorage
+        saveSession({
+          sessionToken: data.sessionToken,
+          email: data.email,
+          name: data.name || payload.name,
+          picture: data.picture || payload.picture,
+        });
+
+        // Update pricing cards and manage section to reflect current plan
+        if (data.status === 'active' && data.plan && data.plan !== 'free') {
+          updatePricingCards(data.plan);
+          updateManageSection(data);
+        } else if (data.status === 'cancelled') {
+          updateManageSection(data);
+        } else {
+          hideManageSection();
+        }
+
+        // If user clicked a plan button before signing in, proceed to checkout now
+        if (pendingCheckoutPlan) {
+          const plan = pendingCheckoutPlan;
+          pendingCheckoutPlan = null;
+          await proceedToCheckout(plan);
+        }
+      } catch (err) {
+        showToast(err.message || 'Failed to check status');
+      }
+    }
+
+    // Checkout — requires Google Sign-In first
+    async function handleCheckout(plan) {
+      if (!signedInEmail) {
+        // Queue the plan and prompt Google Sign-In
+        pendingCheckoutPlan = plan;
+        showToast('Please sign in with Google to continue.');
+        document.querySelector('#pricingSignedOut').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Trigger One Tap prompt as well
+        if (typeof google !== 'undefined' && google.accounts) {
+          google.accounts.id.prompt();
+        }
+        return;
+      }
+      await proceedToCheckout(plan);
+    }
+
+    async function proceedToCheckout(plan) {
+      const btn = document.querySelector(`.plan-card[data-plan="${plan}"] .plan-btn`);
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Redirecting...';
+
+      try {
+        const res = await fetch('/api/create-checkout-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: signedInEmail, plan, billing }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Checkout failed');
+
+        if (data.url) {
+          window.location.href = data.url;
+        } else {
+          throw new Error('No checkout URL returned');
+        }
+      } catch (err) {
+        showToast(err.message);
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
+    }
+
+    // Cancel subscription (authenticated via Google credential or session token)
+    async function handleCancel() {
+      if (!googleCredential && !sessionToken) return;
+      if (!confirm('Are you sure you want to cancel your subscription? You will keep access until the end of your current billing period.')) return;
+
+      const cancelBtn = document.querySelector('.nav-cancel-link');
+      if (cancelBtn) { cancelBtn.disabled = true; cancelBtn.textContent = 'Cancelling...'; }
+
+      try {
+        const body = googleCredential
+          ? { credential: googleCredential }
+          : { sessionToken };
+        const res = await fetch('/api/cancel-subscription', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to cancel');
+
+        showToast(data.message || 'Subscription cancelled.');
+        resetPricingCards();
+
+        // Update nav badge to cancelled state
+        const badge = document.getElementById('navPlanBadge');
+        const name = badge.textContent.replace(' Plan', '');
+        badge.textContent = name + ' — Cancelled';
+        badge.classList.add('cancelled');
+        document.getElementById('navCancelWrap').innerHTML = '';
+      } catch (err) {
+        showToast(err.message);
+        if (cancelBtn) { cancelBtn.disabled = false; cancelBtn.textContent = 'Cancel'; }
+      }
+    }
+
+    // Sign out — reset everything
+    function handleSignOut() {
+      googleCredential = null;
+      signedInEmail = null;
+      sessionToken = null;
+      pendingCheckoutPlan = null;
+      clearSession();
+      resetSignedInUI();
+      google.accounts.id.disableAutoSelect();
+    }
+  </script>
+</body>
+</html>

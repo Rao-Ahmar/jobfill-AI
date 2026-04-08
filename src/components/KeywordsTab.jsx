@@ -50,8 +50,8 @@ function ScoreGauge({ score, matched, total, summary }) {
   );
 }
 
-export function KeywordsTab({ onNavigate }) {
-  const { canUseFeature, incrementUsage, daysUntilReset } = useSubscription();
+export function KeywordsTab() {
+  const { canUseFeature, incrementUsage, daysUntilReset, userEmail, syncServerUsage, openWebsite } = useSubscription();
   const [profile] = useStorage('jobfill_profile', {});
   const [resumeText] = useStorage('jobfill_resume_text', '');
 
@@ -69,7 +69,7 @@ export function KeywordsTab({ onNavigate }) {
 
   const handleAnalyze = async () => {
     if (!check.allowed) {
-      onNavigate?.('pro');
+      openWebsite();
       return;
     }
 
@@ -78,11 +78,17 @@ export function KeywordsTab({ onNavigate }) {
       return;
     }
 
+    const email = userEmail || profile?.email;
+
     setIsAnalyzing(true);
     try {
-      const keywordsData = await analyzeKeywords(profile, resumeText, jobDescription);
+      const keywordsData = await analyzeKeywords(profile, resumeText, jobDescription, email);
       setAnalysisData(keywordsData);
-      await incrementUsage('keywords');
+      if (keywordsData._serverUsage) {
+        await syncServerUsage({ plan: undefined, usage: keywordsData._serverUsage, resetDate: keywordsData._serverUsage.resetDate });
+      } else {
+        await incrementUsage('keywords');
+      }
       showToast('Analysis Complete ✓');
     } catch (error) {
       console.error(error);
@@ -131,7 +137,7 @@ export function KeywordsTab({ onNavigate }) {
           </div>
           <p className="text-[11px] text-indigo-200 leading-tight">
             Requires {PLAN_LABELS[check.upgradeTarget]}.{' '}
-            <button onClick={() => onNavigate?.('pro')} className="font-bold underline">Upgrade</button> to unlock ATS keyword analysis.
+            <button onClick={openWebsite} className="font-bold underline">Upgrade</button> to unlock ATS keyword analysis.
           </p>
         </div>
       );
@@ -145,7 +151,7 @@ export function KeywordsTab({ onNavigate }) {
           </div>
           <p className="text-[11px] text-amber-200 leading-tight">
             {check.used}/{check.limit} used this month. Resets in {daysUntilReset} days.{' '}
-            <button onClick={() => onNavigate?.('pro')} className="font-bold underline">Upgrade</button> for more.
+            <button onClick={openWebsite} className="font-bold underline">Upgrade</button> for more.
           </p>
         </div>
       );

@@ -1,8 +1,8 @@
 const PROXY_API_URL = 'http://localhost:3001/api/generate';
 
-export async function generateCoverLetter(profile, resumeText, jobDescription) {
+export async function generateCoverLetter(profile, resumeText, jobDescription, email) {
   const systemPrompt = "You are an expert career coach and cover letter writer. Your task is to write a professional, tailored cover letter in 3 paragraphs. Make it sound human. Match keywords from the job description naturally.";
-  
+
   const userPrompt = `
 Here is my profile data:
 ${JSON.stringify(profile, null, 2)}
@@ -27,25 +27,33 @@ Please write the cover letter now. Ensure it is exactly 3 paragraphs. Only retur
         max_tokens: 1500,
         system: systemPrompt,
         prompt: userPrompt,
+        email: email || undefined,
+        feature: 'coverletter',
       }),
     });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
+      if (response.status === 403) {
+        const err = new Error(errorData.error || 'Usage limit reached.');
+        err.code = errorData.code;
+        err.serverUsage = errorData;
+        throw err;
+      }
       throw new Error(errorData.error || "Failed to generate cover letter.");
     }
 
     const data = await response.json();
     const text = data?.content?.[0]?.text;
     if (!text) throw new Error("No response from AI. Please try again.");
-    return text;
+    return { text, _serverUsage: data._serverUsage || null };
   } catch (err) {
     console.error("Cover letter generation error:", err);
     throw err;
   }
 }
 
-export async function analyzeKeywords(profile, resumeText, jobDescription) {
+export async function analyzeKeywords(profile, resumeText, jobDescription, email) {
   const systemPrompt = `You are an expert ATS optimizer.
 Extract top 10 ATS keywords from the job description.
 For each keyword:
@@ -91,11 +99,19 @@ ${jobDescription}
         max_tokens: 4096,
         system: systemPrompt,
         prompt: userPrompt,
+        email: email || undefined,
+        feature: 'keywords',
       }),
     });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
+      if (response.status === 403) {
+        const err = new Error(errorData.error || 'Usage limit reached.');
+        err.code = errorData.code;
+        err.serverUsage = errorData;
+        throw err;
+      }
       throw new Error(errorData.error || "Failed to analyze keywords.");
     }
 
@@ -128,7 +144,7 @@ ${jobDescription}
       const summary = typeof parsed.summary === 'string'
         ? parsed.summary
         : '';
-      return { overallScore, summary, results };
+      return { overallScore, summary, results, _serverUsage: data._serverUsage || null };
     } catch (parseError) {
       console.error("Failed to parse AI JSON response:", text);
       throw new Error("AI returned malformed response. Please try again.");
@@ -139,7 +155,7 @@ ${jobDescription}
   }
 }
 
-export async function generateAutoFillMapping(profile, customFields, resumeText, formFields) {
+export async function generateAutoFillMapping(profile, customFields, resumeText, formFields, email) {
   const systemPrompt = `You are the job applicant. You are filling out a real job application form.
 You receive your Profile, Custom Answers, Resume, and a list of Form Fields (each has an "id", "label", "type", and sometimes "options").
 
@@ -190,28 +206,37 @@ ${JSON.stringify(formFields, null, 2)}
         max_tokens: 8192,
         system: systemPrompt,
         prompt: userPrompt,
+        email: email || undefined,
+        feature: 'autofill',
       }),
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.json().catch(() => ({}));
+      if (response.status === 403) {
+        const err = new Error(errorData.error || 'Usage limit reached.');
+        err.code = errorData.code;
+        err.serverUsage = errorData;
+        throw err;
+      }
       throw new Error(errorData.error || "Failed to generate autofill mapping.");
     }
 
     const data = await response.json();
     let text = data.content[0].text;
-    
+
     // Safely extract just the JSON block if the AI ignored instructions and added markdown
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       text = jsonMatch[0];
     }
-    
+
     try {
       const parsed = JSON.parse(text);
       return {
         mapping: parsed.mapping || {},
-        missingFields: parsed.missingFields || []
+        missingFields: parsed.missingFields || [],
+        _serverUsage: data._serverUsage || null,
       };
     } catch (parseError) {
       console.error("Failed to parse AI JSON response:", text);

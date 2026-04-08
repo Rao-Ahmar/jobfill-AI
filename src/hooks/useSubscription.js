@@ -2,10 +2,11 @@ import { useState, useEffect } from 'react';
 import { PLAN_LIMITS, PLAN_TIERS, FEATURE_REQUIRED_PLAN, hasTierAccess, getUpgradeTarget } from '@/config/plans';
 
 const SERVER_URL = 'http://localhost:3001';
+const WEBSITE_URL = SERVER_URL;
 
 // ─── TESTING BYPASS ──────────────────────────────────────────────────────────
 // Set to true during development: forces plan='power', all features allowed
-const TESTING_BYPASS = true;
+const TESTING_BYPASS = false;
 // ─────────────────────────────────────────────────────────────────────────────
 
 function getNextResetDate() {
@@ -22,6 +23,7 @@ export function useSubscription() {
   const [usage, setUsage] = useState(createEmptyUsage());
   const [isLoading, setIsLoading] = useState(!TESTING_BYPASS);
   const [subscriptionData, setSubscriptionData] = useState(null);
+  const [userEmail, setUserEmail] = useState(null);
 
   // Backward compat
   const isSubscribed = plan !== 'free';
@@ -31,19 +33,122 @@ export function useSubscription() {
     loadFromStorage();
   }, []);
 
+  // Sync usage counters from server into local state + chrome.storage
+  // NOTE: This only syncs usage numbers, NEVER the plan.
+  // Plan is set exclusively from the verify-subscription response.
+  const syncServerUsage = async (serverUsage) => {
+    if (!serverUsage) return;
+
+    const newUsage = {
+      autofill: serverUsage.usage?.autofill ?? 0,
+      coverletter: serverUsage.usage?.coverletter ?? 0,
+      keywords: serverUsage.usage?.keywords ?? 0,
+      resetDate: serverUsage.resetDate ? new Date(serverUsage.resetDate).getTime() : getNextResetDate(),
+    };
+
+    setUsage(newUsage);
+    await chrome.storage.local.set({ jobfill_usage: newUsage });
+  };
+
+  // Fetch server-side usage for a given email
+  const fetchServerUsage = async (email) => {
+    if (!email) return null;
+    try {
+      const response = await fetch(`${SERVER_URL}/api/usage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      await syncServerUsage(data);
+      return data;
+    } catch {
+      return null;
+    }
+  };
+
   const loadFromStorage = async () => {
     try {
       const result = await chrome.storage.local.get([
         'jobfill_subscription',
         'jobfill_usage',
         'jobfill_usage_count', // legacy key for migration
+        'jobfill_checkout_email',
+        'jobfill_profile',
       ]);
+
+      // Resolve user email from profile or subscription
+      const profileEmail = result.jobfill_profile?.email || null;
+      const subEmail = result.jobfill_subscription?.email || null;
+      const resolvedEmail = subEmail || profileEmail || null;
+      setUserEmail(resolvedEmail);
 
       // Restore subscription / plan
       const stored = result.jobfill_subscription;
+      const pendingEmail = result.jobfill_checkout_email;
+
       if (stored?.status === 'active') {
-        if (!TESTING_BYPASS) setPlan(stored.plan || 'starter');
-        setSubscriptionData(stored);
+        // Always verify with Stripe before trusting cached data
+        const email = stored.email;
+        if (email) {
+          try {
+            const response = await fetch(`${SERVER_URL}/api/verify-subscription`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email }),
+            });
+            const data = await response.json();
+
+            // Always trust server for plan (Stripe is source of truth)
+            if (!TESTING_BYPASS) setPlan(data.plan || 'free');
+
+            if (data.status === 'active') {
+              const subData = { ...data, email };
+              await chrome.storage.local.set({ jobfill_subscription: subData });
+              setSubscriptionData(subData);
+            } else {
+              // Subscription cancelled or not found — clear cached data
+              await chrome.storage.local.remove(['jobfill_subscription']);
+              setSubscriptionData(null);
+            }
+            if (data.serverUsage) await syncServerUsage(data.serverUsage);
+          } catch (err) {
+            // Server unreachable — fall back to cached data so offline still works
+            console.warn('Server verification failed, using cached data:', err);
+            if (!TESTING_BYPASS) setPlan(stored.plan || 'starter');
+            setSubscriptionData(stored);
+          }
+        } else {
+          // No email in cached data — use cached plan
+          if (!TESTING_BYPASS) setPlan(stored.plan || 'starter');
+          setSubscriptionData(stored);
+        }
+      } else if (pendingEmail) {
+        // Auto-verify: user went through checkout, check if subscription is now active
+        try {
+          const response = await fetch(`${SERVER_URL}/api/verify-subscription`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: pendingEmail }),
+          });
+          const data = await response.json();
+          // Always trust server for plan (Stripe is source of truth)
+          if (!TESTING_BYPASS) setPlan(data.plan || 'free');
+
+          if (data.status === 'active') {
+            const subData = { ...data, email: pendingEmail };
+            await chrome.storage.local.set({ jobfill_subscription: subData });
+            await chrome.storage.local.remove('jobfill_checkout_email');
+            setSubscriptionData(subData);
+          }
+          if (data.serverUsage) await syncServerUsage(data.serverUsage);
+        } catch (err) {
+          console.error('Auto-verify failed:', err);
+        }
+      } else if (resolvedEmail) {
+        // No subscription but we have an email — fetch server usage for free user
+        fetchServerUsage(resolvedEmail);
       }
 
       // Restore usage (with migration from old single counter)
@@ -76,7 +181,7 @@ export function useSubscription() {
   };
 
   const canUseFeature = (feature) => {
-    if (TESTING_BYPASS) {
+    if (TESTING_BYPASS || isLoading) {
       return { allowed: true, reason: null, upgradeTarget: null, remaining: Infinity };
     }
 
@@ -115,9 +220,11 @@ export function useSubscription() {
     return { allowed: true, reason: null, upgradeTarget: null, remaining: Infinity };
   };
 
-  const incrementUsage = async (feature) => {
+  const incrementUsage = async (feature, serverCount) => {
     const key = feature || 'autofill';
-    const updated = { ...usage, [key]: (usage[key] || 0) + 1 };
+    // If server provided the count, use it (authoritative); otherwise increment locally
+    const newCount = serverCount != null ? serverCount : (usage[key] || 0) + 1;
+    const updated = { ...usage, [key]: newCount };
     await chrome.storage.local.set({ jobfill_usage: updated });
     setUsage(updated);
     return updated[key];
@@ -138,15 +245,20 @@ export function useSubscription() {
 
       const data = await response.json();
 
+      // Always trust server for plan (Stripe is source of truth)
+      if (!TESTING_BYPASS) setPlan(data.plan || 'free');
+
       if (data.status === 'active') {
         const subData = { ...data, email: lookupEmail };
         await chrome.storage.local.set({ jobfill_subscription: subData });
         setSubscriptionData(subData);
-        if (!TESTING_BYPASS) setPlan(data.plan || 'starter');
       } else {
-        if (!TESTING_BYPASS) setPlan('free');
+        await chrome.storage.local.remove(['jobfill_subscription']);
+        setSubscriptionData(null);
       }
 
+      if (data.serverUsage) await syncServerUsage(data.serverUsage);
+      setUserEmail(lookupEmail);
       return data;
     } catch (err) {
       console.error('Failed to verify subscription:', err);
@@ -156,42 +268,12 @@ export function useSubscription() {
     }
   };
 
-  const openCheckout = async (email, planName, billing) => {
-    try {
-      const response = await fetch(`${SERVER_URL}/api/create-checkout-session`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, plan: planName, billing }),
-      });
-      const data = await response.json();
-      if (data.url) {
-        chrome.tabs.create({ url: data.url });
-      }
-      return data;
-    } catch (err) {
-      console.error('Checkout error:', err);
-      return { error: err.message };
-    }
-  };
-
-  const openPortal = async (email) => {
-    try {
-      const response = await fetch(`${SERVER_URL}/api/customer-portal`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
-      const data = await response.json();
-      if (data.url) {
-        chrome.tabs.create({ url: data.url });
-      }
-    } catch (err) {
-      console.error('Portal error:', err);
-    }
+  const openWebsite = (hash) => {
+    chrome.tabs.create({ url: hash ? `${WEBSITE_URL}/#${hash}` : WEBSITE_URL });
   };
 
   const clearSubscription = async () => {
-    await chrome.storage.local.remove(['jobfill_subscription', 'jobfill_usage', 'jobfill_usage_count']);
+    await chrome.storage.local.remove(['jobfill_subscription', 'jobfill_usage', 'jobfill_usage_count', 'jobfill_checkout_email']);
     if (!TESTING_BYPASS) setPlan('free');
     setSubscriptionData(null);
     setUsage(createEmptyUsage());
@@ -207,11 +289,13 @@ export function useSubscription() {
     usageCount,
     daysUntilReset,
     subscriptionData,
+    userEmail,
     canUseFeature,
     incrementUsage,
+    syncServerUsage,
+    fetchServerUsage,
     refreshStatus,
-    openCheckout,
-    openPortal,
+    openWebsite,
     clearSubscription,
   };
 }

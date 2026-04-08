@@ -1,87 +1,191 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const crypto = require('crypto');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { OAuth2Client } = require('google-auth-library');
+const jwt = require('jsonwebtoken');
+const Stripe = require('stripe');
+const db = require('./db');
+const { PLAN_LIMITS, FEATURE_REQUIRED_PLAN, hasTierAccess } = require('./plans');
 
 const app = express();
 const port = process.env.PORT || 3001;
 
-const LS_API_KEY        = process.env.LEMONSQUEEZY_API_KEY;
-const LS_STORE_ID       = process.env.LEMONSQUEEZY_STORE_ID;
-const LS_WEBHOOK_SECRET = process.env.LEMONSQUEEZY_WEBHOOK_SECRET;
-const LS_BASE           = 'https://api.lemonsqueezy.com/v1';
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const SESSION_SECRET = process.env.SESSION_SECRET || 'fallback-dev-secret-change-me';
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
-// ─── Variant → Plan mapping ─────────────────────────────────────────────────
-const VARIANT_IDS = {
-  starter_monthly: process.env.LS_VARIANT_STARTER_MONTHLY,
-  starter_annual:  process.env.LS_VARIANT_STARTER_ANNUAL,
-  pro_monthly:     process.env.LS_VARIANT_PRO_MONTHLY,
-  pro_annual:      process.env.LS_VARIANT_PRO_ANNUAL,
-  power_monthly:   process.env.LS_VARIANT_POWER_MONTHLY,
-  power_annual:    process.env.LS_VARIANT_POWER_ANNUAL,
+// ─── Price → Plan mapping ────────────────────────────────────────────────────
+const PRICE_IDS = {
+  starter_monthly: process.env.STRIPE_PRICE_STARTER_MONTHLY,
+  starter_annual:  process.env.STRIPE_PRICE_STARTER_ANNUAL,
+  pro_monthly:     process.env.STRIPE_PRICE_PRO_MONTHLY,
+  pro_annual:      process.env.STRIPE_PRICE_PRO_ANNUAL,
+  power_monthly:   process.env.STRIPE_PRICE_POWER_MONTHLY,
+  power_annual:    process.env.STRIPE_PRICE_POWER_ANNUAL,
 };
 
-// Reverse lookup: variant ID → plan tier
-const VARIANT_PLAN_MAP = {};
-Object.entries(VARIANT_IDS).forEach(([key, id]) => {
-  if (id) VARIANT_PLAN_MAP[id] = key.split('_')[0]; // 'starter', 'pro', or 'power'
+// Reverse lookup: price ID → plan tier
+const PRICE_PLAN_MAP = {};
+Object.entries(PRICE_IDS).forEach(([key, id]) => {
+  if (id) PRICE_PLAN_MAP[id] = key.split('_')[0]; // 'starter', 'pro', or 'power'
 });
 
-function resolveVariantId(plan, billing) {
+function resolvePriceId(plan, billing) {
   const key = `${plan}_${billing}`;
-  return VARIANT_IDS[key] || null;
+  return PRICE_IDS[key] || null;
 }
 
-function lookupPlanFromVariant(variantId) {
-  return VARIANT_PLAN_MAP[String(variantId)] || 'starter';
+function lookupPlanFromPriceId(priceId) {
+  return PRICE_PLAN_MAP[String(priceId)] || 'starter';
 }
 
-const lsHeaders = () => ({
-  'Accept': 'application/vnd.api+json',
-  'Content-Type': 'application/vnd.api+json',
-  'Authorization': `Bearer ${LS_API_KEY}`,
-});
+// Serialize usage limits for JSON (Infinity → null)
+function serializeLimit(val) {
+  return val === Infinity ? null : val;
+}
 
-// Lemon Squeezy webhooks need raw body — must be BEFORE express.json()
-app.post('/api/webhook', express.raw({ type: 'application/json' }), (req, res) => {
-  const rawBody  = req.body;
-  const signature = req.headers['x-signature'];
+function buildUsageResponse(email) {
+  const user = db.getUser(email);
+  if (!user) return null;
+  const usage = db.getUsage(email);
+  const limits = PLAN_LIMITS[user.plan] || PLAN_LIMITS.free;
+  return {
+    plan: user.plan,
+    usage: {
+      autofill: usage.autofill,
+      coverletter: usage.coverletter,
+      keywords: usage.keywords,
+    },
+    limits: {
+      autofill: serializeLimit(limits.autofill),
+      coverletter: serializeLimit(limits.coverletter),
+      keywords: serializeLimit(limits.keywords),
+    },
+    resetDate: usage.resetDate,
+  };
+}
 
-  if (LS_WEBHOOK_SECRET && signature) {
-    const hmac   = crypto.createHmac('sha256', LS_WEBHOOK_SECRET);
-    const digest = hmac.update(rawBody).digest('hex');
-    if (digest !== signature) {
-      console.error('Webhook signature mismatch');
-      return res.status(400).send('Invalid signature');
-    }
+// ─── Google Sign-In verification ─────────────────────────────────────────────
+async function verifyGoogleCredential(credential) {
+  const ticket = await googleClient.verifyIdToken({
+    idToken: credential,
+    audience: GOOGLE_CLIENT_ID,
+  });
+  const payload = ticket.getPayload();
+  if (!payload.email_verified) {
+    throw new Error('Email not verified by Google');
   }
+  return { email: payload.email, name: payload.name, picture: payload.picture };
+}
+
+// ─── Session Token helpers ────────────────────────────────────────────────────
+function generateSessionToken(email) {
+  return jwt.sign({ email }, SESSION_SECRET, { expiresIn: '30d' });
+}
+
+function verifySessionToken(token) {
+  return jwt.verify(token, SESSION_SECRET); // throws on invalid/expired
+}
+
+// ─── Stripe Webhook (raw body — must be BEFORE express.json()) ──────────────
+app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
 
   let event;
   try {
-    event = JSON.parse(rawBody.toString());
-  } catch {
-    return res.status(400).send('Invalid JSON');
+    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  const eventName = event.meta?.event_name;
-  const attrs = event.data?.attributes;
-  const variantId = attrs?.variant_id;
-  const planTier = variantId ? lookupPlanFromVariant(variantId) : 'unknown';
+  console.log(`Stripe webhook: ${event.type}`);
 
-  console.log(`LemonSqueezy webhook: ${eventName} | plan=${planTier}`);
+  try {
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object;
+        const email = session.customer_email || session.customer_details?.email;
+        const customerId = session.customer;
+        const subscriptionId = session.subscription;
 
-  switch (eventName) {
-    case 'subscription_created':
-    case 'subscription_updated':
-      console.log('Subscription active:', attrs?.user_email, `(${planTier})`);
-      break;
-    case 'subscription_cancelled':
-    case 'subscription_expired':
-      console.log('Subscription ended:', attrs?.user_email, `(${planTier})`);
-      break;
-    default:
-      console.log(`Unhandled event: ${eventName}`);
+        if (email && subscriptionId) {
+          // Retrieve subscription to get price/plan
+          const sub = await stripe.subscriptions.retrieve(subscriptionId);
+          const priceId = sub.items?.data?.[0]?.price?.id;
+          const planTier = priceId ? lookupPlanFromPriceId(priceId) : 'starter';
+
+          db.upsertUser({
+            email,
+            plan: planTier,
+            stripeCustomerId: customerId,
+            stripeSubscriptionId: subscriptionId,
+          });
+          console.log(`DB: upserted user ${email} → plan=${planTier}`);
+        }
+        break;
+      }
+
+      case 'customer.subscription.updated': {
+        const sub = event.data.object;
+        const priceId = sub.items?.data?.[0]?.price?.id;
+        const planTier = priceId ? lookupPlanFromPriceId(priceId) : 'unknown';
+        const customerId = sub.customer;
+
+        if (sub.status === 'active' || sub.status === 'trialing') {
+          // Try to find user by customer ID and update plan
+          const user = db.getUserByCustomerId(customerId);
+          if (user) {
+            db.updatePlan({
+              email: user.email,
+              plan: planTier,
+              stripeCustomerId: customerId,
+              stripeSubscriptionId: sub.id,
+            });
+            console.log(`DB: updated ${user.email} → plan=${planTier}`);
+          } else {
+            // Fetch customer email from Stripe
+            const customer = await stripe.customers.retrieve(customerId);
+            if (customer.email) {
+              db.upsertUser({
+                email: customer.email,
+                plan: planTier,
+                stripeCustomerId: customerId,
+                stripeSubscriptionId: sub.id,
+              });
+              console.log(`DB: upserted ${customer.email} → plan=${planTier}`);
+            }
+          }
+        }
+        break;
+      }
+
+      case 'customer.subscription.deleted': {
+        const sub = event.data.object;
+        const customerId = sub.customer;
+
+        const user = db.getUserByCustomerId(customerId);
+        if (user) {
+          db.updatePlan({
+            email: user.email,
+            plan: 'free',
+            stripeCustomerId: customerId,
+            stripeSubscriptionId: null,
+          });
+          db.resetUsageForUser(user.email);
+          console.log(`DB: downgraded ${user.email} → free, usage reset`);
+        }
+        break;
+      }
+
+      default:
+        console.log(`Unhandled event: ${event.type}`);
+    }
+  } catch (err) {
+    console.error('Webhook handler error:', err);
   }
 
   res.json({ received: true });
@@ -89,158 +193,449 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), (req, res) =
 
 app.use(cors());
 app.use(express.json());
+app.use(express.static('public'));
+
+// ─── Config endpoint (exposes Google Client ID to frontend) ─────────────────
+app.get('/api/config', (req, res) => {
+  res.json({ googleClientId: GOOGLE_CLIENT_ID || '' });
+});
+
+// ─── Google Auth: Verify + lookup subscription ──────────────────────────────
+app.post('/api/auth/google', async (req, res) => {
+  try {
+    const { credential } = req.body;
+    if (!credential) return res.status(400).json({ error: 'credential is required' });
+
+    const { email, name, picture } = await verifyGoogleCredential(credential);
+
+    // Reuse the same Stripe lookup logic as verify-subscription
+    let activeSub = null;
+
+    const customers = await stripe.customers.list({ email, limit: 1 });
+    if (customers.data.length > 0) {
+      const customer = customers.data[0];
+      const subs = await stripe.subscriptions.list({ customer: customer.id, status: 'active', limit: 5 });
+      const trialingSubs = await stripe.subscriptions.list({ customer: customer.id, status: 'trialing', limit: 5 });
+      const allActive = [...subs.data, ...trialingSubs.data];
+
+      const nonCancelling = allActive.filter(s => !s.cancel_at_period_end);
+      activeSub = nonCancelling[0] || allActive[0] || null;
+    }
+
+    let status, plan;
+    if (activeSub && activeSub.cancel_at_period_end) {
+      status = 'cancelled';
+      plan = 'free';
+    } else if (activeSub) {
+      status = 'active';
+      const priceId = activeSub.items?.data?.[0]?.price?.id;
+      plan = priceId ? lookupPlanFromPriceId(priceId) : 'starter';
+    } else {
+      status = 'none';
+      plan = 'free';
+    }
+
+    // Sync DB
+    db.ensureUser(email);
+    db.updatePlan({
+      email,
+      plan,
+      stripeCustomerId: activeSub?.customer || null,
+      stripeSubscriptionId: activeSub?.id || null,
+    });
+
+    const sessionToken = generateSessionToken(email);
+    const result = { status, plan, email, name, picture, sessionToken };
+
+    if (activeSub) {
+      const periodEnd = activeSub.items?.data?.[0]?.current_period_end;
+      result.currentPeriodEnd = periodEnd ? new Date(periodEnd * 1000).toISOString() : null;
+      if (status === 'cancelled') {
+        result.cancelAt = activeSub.cancel_at ? new Date(activeSub.cancel_at * 1000).toISOString() : null;
+      }
+    }
+
+    console.log(`Google Auth: ${email} → status=${status}, plan=${plan}`);
+    res.json(result);
+  } catch (error) {
+    console.error('Google auth error:', error);
+    res.status(401).json({ error: error.message || 'Authentication failed' });
+  }
+});
+
+// ─── Session Restore: Validate session token + fetch fresh Stripe status ─────
+app.post('/api/session', async (req, res) => {
+  try {
+    const { sessionToken } = req.body;
+    if (!sessionToken) return res.status(400).json({ error: 'sessionToken is required' });
+
+    let payload;
+    try {
+      payload = verifySessionToken(sessionToken);
+    } catch (err) {
+      return res.status(401).json({ error: 'Invalid or expired session' });
+    }
+
+    const email = payload.email;
+
+    // Fetch fresh subscription status from Stripe
+    let activeSub = null;
+    const customers = await stripe.customers.list({ email, limit: 1 });
+    if (customers.data.length > 0) {
+      const customer = customers.data[0];
+      const subs = await stripe.subscriptions.list({ customer: customer.id, status: 'active', limit: 5 });
+      const trialingSubs = await stripe.subscriptions.list({ customer: customer.id, status: 'trialing', limit: 5 });
+      const allActive = [...subs.data, ...trialingSubs.data];
+
+      const nonCancelling = allActive.filter(s => !s.cancel_at_period_end);
+      activeSub = nonCancelling[0] || allActive[0] || null;
+    }
+
+    let status, plan;
+    if (activeSub && activeSub.cancel_at_period_end) {
+      status = 'cancelled';
+      plan = 'free';
+    } else if (activeSub) {
+      status = 'active';
+      const priceId = activeSub.items?.data?.[0]?.price?.id;
+      plan = priceId ? lookupPlanFromPriceId(priceId) : 'starter';
+    } else {
+      status = 'none';
+      plan = 'free';
+    }
+
+    // Sync DB
+    db.ensureUser(email);
+    db.updatePlan({
+      email,
+      plan,
+      stripeCustomerId: activeSub?.customer || null,
+      stripeSubscriptionId: activeSub?.id || null,
+    });
+
+    const result = { status, plan, email };
+
+    if (activeSub) {
+      const periodEnd = activeSub.items?.data?.[0]?.current_period_end;
+      result.currentPeriodEnd = periodEnd ? new Date(periodEnd * 1000).toISOString() : null;
+      if (status === 'cancelled') {
+        result.cancelAt = activeSub.cancel_at ? new Date(activeSub.cancel_at * 1000).toISOString() : null;
+      }
+    }
+
+    console.log(`Session restore: ${email} → status=${status}, plan=${plan}`);
+    res.json(result);
+  } catch (error) {
+    console.error('Session restore error:', error);
+    res.status(500).json({ error: error.message || 'Session restore failed' });
+  }
+});
 
 // Initialize Google Gemini SDK
 const genAI = new GoogleGenerativeAI(process.env.CLAUDE_API_KEY || process.env.GEMINI_API_KEY);
 
-// ─── Lemon Squeezy: Create Checkout ───────────────────────────────────────────
+// ─── Success / Cancel pages ──────────────────────────────────────────────────
+const BASE_URL = process.env.BASE_URL || `http://localhost:${port}`;
+
+app.get('/success', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Payment Successful — JobFill AI</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#0f0b1e 0%,#1a1145 50%,#0f0b1e 100%);color:#fff}
+  .card{text-align:center;max-width:440px;padding:48px 32px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:24px;backdrop-filter:blur(20px)}
+  .icon{width:72px;height:72px;margin:0 auto 24px;background:linear-gradient(135deg,#22c55e,#16a34a);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:36px;box-shadow:0 0 40px rgba(34,197,94,.3)}
+  h1{font-size:24px;font-weight:700;margin-bottom:8px}
+  p{color:rgba(255,255,255,.7);font-size:15px;line-height:1.6;margin-bottom:24px}
+  .steps{text-align:left;background:rgba(255,255,255,.04);border-radius:12px;padding:20px 24px;margin-bottom:24px}
+  .steps li{color:rgba(255,255,255,.8);font-size:14px;margin-bottom:10px;padding-left:4px}
+  .steps li:last-child{margin-bottom:0}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:rgba(255,255,255,.5);margin-top:16px}
+  .badge svg{width:14px;height:14px}
+</style></head>
+<body><div class="card">
+  <div class="icon">&#10003;</div>
+  <h1>Payment Successful!</h1>
+  <p>Your JobFill AI subscription is now active. You're all set to supercharge your job applications.</p>
+  <ol class="steps">
+    <li>Open the <strong>JobFill AI</strong> extension in Chrome</li>
+    <li>Go to the <strong>Subscription</strong> tab</li>
+    <li>Click <strong>Verify Existing Subscription</strong> with your email</li>
+  </ol>
+  <p style="font-size:13px">You can close this tab now.</p>
+  <div class="badge">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    Secured by Stripe
+  </div>
+</div></body></html>`);
+});
+
+// ─── Stripe: Create Checkout Session ─────────────────────────────────────────
 app.post('/api/create-checkout-session', async (req, res) => {
   try {
     const { email, plan, billing } = req.body;
-    const variantId = resolveVariantId(plan || 'starter', billing || 'monthly');
+    const priceId = resolvePriceId(plan || 'starter', billing || 'monthly');
 
-    if (!variantId) {
-      return res.status(400).json({ error: `No variant configured for plan="${plan}" billing="${billing}"` });
+    if (!priceId) {
+      return res.status(400).json({ error: `No price configured for plan="${plan}" billing="${billing}"` });
     }
 
-    console.log('--- LemonSqueezy Checkout ---');
-    console.log(`Plan: ${plan}, Billing: ${billing}, Variant: ${variantId}`);
+    console.log('--- Stripe Checkout ---');
+    console.log(`Plan: ${plan}, Billing: ${billing}, Price: ${priceId}`);
 
-    const body = {
-      data: {
-        type: 'checkouts',
-        attributes: {
-          checkout_data: email ? { email } : {},
-          product_options: {
-            redirect_url: 'https://jobfill.ai/success',
-          },
-          checkout_options: {
-            logo: true,
-            desc: true,
-            discount: true,
-          },
-        },
-        relationships: {
-          store: {
-            data: { type: 'stores', id: String(LS_STORE_ID) },
-          },
-          variant: {
-            data: { type: 'variants', id: String(variantId) },
-          },
-        },
-      },
-    };
-
-    const response = await fetch(`${LS_BASE}/checkouts`, {
-      method: 'POST',
-      headers: lsHeaders(),
-      body: JSON.stringify(body),
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      customer_email: email || undefined,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${BASE_URL}/success`,
+      cancel_url: `${BASE_URL}/success`,
     });
 
-    if (!response.ok) {
-      const err = await response.json();
-      console.error('LS API Error Detail:', JSON.stringify(err, null, 2));
-      throw new Error(JSON.stringify(err));
-    }
-
-    const data = await response.json();
-    const url = data.data?.attributes?.url;
-    res.json({ url, checkoutId: data.data?.id });
+    res.json({ url: session.url, checkoutId: session.id });
   } catch (error) {
-    console.error('LS Checkout error:', error);
+    console.error('Stripe Checkout error:', error);
     res.status(500).json({ error: error.message || 'Failed to create checkout' });
   }
 });
 
-// ─── Lemon Squeezy: Verify Subscription ───────────────────────────────────────
+// ─── Stripe: Verify Subscription ─────────────────────────────────────────────
+// Stripe is the SINGLE source of truth for plan status.
+// DB is only used for usage counters — plan is always derived from Stripe.
 app.post('/api/verify-subscription', async (req, res) => {
   try {
     const { email, subscriptionId } = req.body;
 
-    // Direct lookup by subscription ID
+    let activeSub = null;
+    let customerEmail = email;
+
+    // 1. Find subscription directly from Stripe (source of truth)
     if (subscriptionId) {
-      const r = await fetch(`${LS_BASE}/subscriptions/${subscriptionId}`, {
-        headers: lsHeaders(),
-      });
-      if (r.ok) {
-        const data = await r.json();
-        const attrs = data.data?.attributes;
-        const status = attrs?.status;
-        if (status === 'active' || status === 'on_trial') {
-          const variantId = attrs?.variant_id;
-          return res.json({
-            status: 'active',
-            plan: lookupPlanFromVariant(variantId),
-            subscriptionId: data.data?.id,
-            customerId: attrs?.customer_id,
-            currentPeriodEnd: attrs?.renews_at,
-            email: attrs?.user_email,
-          });
+      try {
+        const sub = await stripe.subscriptions.retrieve(subscriptionId);
+        if (sub.status === 'active' || sub.status === 'trialing') {
+          activeSub = sub;
+          const customer = await stripe.customers.retrieve(sub.customer);
+          customerEmail = customer.email || email;
         }
-      }
+      } catch (e) { /* subscription not found or deleted */ }
     }
 
-    // Lookup by email
-    if (email) {
-      const url = `${LS_BASE}/subscriptions?filter[user_email]=${encodeURIComponent(email)}&page[size]=5`;
-      const r = await fetch(url, { headers: lsHeaders() });
+    if (!activeSub && email) {
+      const customers = await stripe.customers.list({ email, limit: 1 });
+      if (customers.data.length > 0) {
+        const customer = customers.data[0];
+        const subs = await stripe.subscriptions.list({ customer: customer.id, status: 'active', limit: 5 });
+        const trialingSubs = await stripe.subscriptions.list({ customer: customer.id, status: 'trialing', limit: 5 });
+        const allActive = [...subs.data, ...trialingSubs.data];
 
-      if (!r.ok) throw new Error('Failed to query subscriptions');
-      const data = await r.json();
-      const subs = data.data || [];
-
-      const active = subs.find(s =>
-        s.attributes?.status === 'active' || s.attributes?.status === 'on_trial'
-      );
-
-      if (active) {
-        const variantId = active.attributes?.variant_id;
-        return res.json({
-          status: 'active',
-          plan: lookupPlanFromVariant(variantId),
-          subscriptionId: active.id,
-          customerId: active.attributes?.customer_id,
-          currentPeriodEnd: active.attributes?.renews_at,
-          email: active.attributes?.user_email,
+        // Debug: log all subscriptions found
+        console.log(`Stripe: found ${allActive.length} active sub(s) for ${email}`);
+        allActive.forEach((s, i) => {
+          console.log(`  sub[${i}]: ${s.id}, status=${s.status}, cancel_at_period_end=${s.cancel_at_period_end}`);
         });
+
+        // Pick the best subscription:
+        // - Prefer truly active (not cancelling) over cancelling
+        // - If ALL are cancelling, use the first one (will be reported as cancelled)
+        const nonCancelling = allActive.filter(s => !s.cancel_at_period_end);
+        activeSub = nonCancelling[0] || allActive[0] || null;
+        if (activeSub) customerEmail = customer.email || email;
       }
     }
 
-    res.json({ status: 'none' });
+    // 2. Derive plan + status purely from Stripe (never from DB)
+    let status, plan;
+
+    if (activeSub && activeSub.cancel_at_period_end) {
+      status = 'cancelled';
+      plan = 'free';
+    } else if (activeSub) {
+      status = 'active';
+      const priceId = activeSub.items?.data?.[0]?.price?.id;
+      plan = priceId ? lookupPlanFromPriceId(priceId) : 'starter';
+    } else {
+      status = 'none';
+      plan = 'free';
+    }
+
+    // 3. Sync DB to match Stripe (DB is just a cache)
+    if (customerEmail) {
+      db.ensureUser(customerEmail);
+      db.updatePlan({
+        email: customerEmail,
+        plan,
+        stripeCustomerId: activeSub?.customer || null,
+        stripeSubscriptionId: activeSub?.id || null,
+      });
+    }
+
+    // 4. Get usage counters from DB (usage tracking is fine in DB)
+    const usageData = customerEmail ? buildUsageResponse(customerEmail) : null;
+
+    // 5. Build response — plan comes from Stripe, usage from DB
+    const result = { status, plan, email: customerEmail };
+
+    if (activeSub) {
+      const periodEnd = activeSub.items?.data?.[0]?.current_period_end;
+      result.subscriptionId = activeSub.id;
+      result.customerId = activeSub.customer;
+      result.currentPeriodEnd = periodEnd ? new Date(periodEnd * 1000).toISOString() : null;
+      if (status === 'cancelled') {
+        result.cancelAt = activeSub.cancel_at ? new Date(activeSub.cancel_at * 1000).toISOString() : null;
+      }
+    }
+
+    if (usageData) result.serverUsage = usageData;
+
+    console.log(`Verify: ${customerEmail} → status=${status}, plan=${plan}`);
+    res.json(result);
   } catch (error) {
     console.error('Verify subscription error:', error);
     res.status(500).json({ error: error.message || 'Failed to verify subscription' });
   }
 });
 
-// ─── Lemon Squeezy: Customer Portal URL ───────────────────────────────────────
+// ─── Stripe: Customer Portal ─────────────────────────────────────────────────
 app.post('/api/customer-portal', async (req, res) => {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: 'email is required' });
 
-    // Fetch subscription to get the customer portal URL
-    const url = `${LS_BASE}/subscriptions?filter[user_email]=${encodeURIComponent(email)}&page[size]=1`;
-    const r = await fetch(url, { headers: lsHeaders() });
-    const data = await r.json();
-    const sub = (data.data || [])[0];
+    const customers = await stripe.customers.list({ email, limit: 1 });
+    if (customers.data.length === 0) {
+      return res.status(404).json({ error: 'No customer found' });
+    }
 
-    if (!sub) return res.status(404).json({ error: 'No subscription found' });
+    const session = await stripe.billingPortal.sessions.create({
+      customer: customers.data[0].id,
+      return_url: `${BASE_URL}/success`,
+    });
 
-    // The Lemon Squeezy subscription has an "urls" object with customer_portal
-    const portalUrl = sub.attributes?.urls?.customer_portal;
-    res.json({ url: portalUrl || 'https://app.lemonsqueezy.com/my-orders' });
+    res.json({ url: session.url });
   } catch (error) {
     console.error('Portal error:', error);
     res.status(500).json({ error: error.message || 'Failed to get portal URL' });
   }
 });
 
-// ─── Gemini AI Proxy ───────────────────────────────────────────────────────────
+// ─── Stripe: Cancel Subscription ─────────────────────────────────────────────
+app.post('/api/cancel-subscription', async (req, res) => {
+  try {
+    const { credential, sessionToken, email: rawEmail } = req.body;
+
+    // Prefer Google credential → session token → raw email (extension compat)
+    let email;
+    if (credential) {
+      const verified = await verifyGoogleCredential(credential);
+      email = verified.email;
+    } else if (sessionToken) {
+      const payload = verifySessionToken(sessionToken);
+      email = payload.email;
+    } else {
+      email = rawEmail;
+    }
+
+    if (!email) return res.status(400).json({ error: 'email or credential is required' });
+
+    const customers = await stripe.customers.list({ email, limit: 1 });
+    if (customers.data.length === 0) {
+      return res.status(404).json({ error: 'No customer found with this email' });
+    }
+
+    const customer = customers.data[0];
+    const subs = await stripe.subscriptions.list({ customer: customer.id, status: 'active', limit: 5 });
+    const trialingSubs = await stripe.subscriptions.list({ customer: customer.id, status: 'trialing', limit: 5 });
+    const allActive = [...subs.data, ...trialingSubs.data];
+
+    if (allActive.length === 0) {
+      return res.status(404).json({ error: 'No active subscription found' });
+    }
+
+    // Cancel all active subscriptions at period end
+    for (const sub of allActive) {
+      await stripe.subscriptions.update(sub.id, { cancel_at_period_end: true });
+      console.log(`Cancelled subscription ${sub.id} for ${email} (at period end)`);
+    }
+
+    // Update DB
+    db.updatePlan({
+      email,
+      plan: 'free',
+      stripeCustomerId: customer.id,
+      stripeSubscriptionId: null,
+    });
+
+    res.json({ success: true, message: 'Subscription cancelled. Access continues until end of billing period.' });
+  } catch (error) {
+    console.error('Cancel subscription error:', error);
+    res.status(500).json({ error: error.message || 'Failed to cancel subscription' });
+  }
+});
+
+// ─── Usage Endpoint ──────────────────────────────────────────────────────────
+app.post('/api/usage', (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'email is required' });
+
+    // Ensure user exists (does not overwrite existing plan)
+    db.ensureUser(email);
+    const usageData = buildUsageResponse(email);
+
+    res.json(usageData);
+  } catch (error) {
+    console.error('Usage endpoint error:', error);
+    res.status(500).json({ error: error.message || 'Failed to get usage' });
+  }
+});
+
+// ─── Gemini AI Proxy (with server-side usage enforcement) ────────────────────
 app.post('/api/generate', async (req, res) => {
   try {
-    const { prompt, system, max_tokens, temperature } = req.body;
+    const { prompt, system, max_tokens, temperature, email, feature } = req.body;
 
+    // ── Usage enforcement ──
+    if (email && feature) {
+      // Ensure user exists (does not overwrite existing plan)
+      db.ensureUser(email);
+      let user = db.getUser(email);
+
+      // Reset usage if needed
+      db.resetUsageIfNeeded(email);
+      user = db.getUser(email);
+
+      const limits = PLAN_LIMITS[user.plan] || PLAN_LIMITS.free;
+      const requiredPlan = FEATURE_REQUIRED_PLAN[feature] || 'starter';
+
+      // Check tier access
+      if (!hasTierAccess(user.plan, requiredPlan)) {
+        return res.status(403).json({
+          error: `Feature "${feature}" requires a higher plan.`,
+          code: 'TIER_BLOCKED',
+          requiredPlan,
+          currentPlan: user.plan,
+        });
+      }
+
+      // Check usage limit
+      const limit = limits[feature];
+      const usageKey = `usage_${feature}`;
+      const used = user[usageKey] || 0;
+
+      if (limit !== undefined && limit !== Infinity && used >= limit) {
+        return res.status(403).json({
+          error: `Monthly ${feature} limit reached (${used}/${limit}).`,
+          code: 'LIMIT_REACHED',
+          used,
+          limit: serializeLimit(limit),
+          feature,
+          plan: user.plan,
+        });
+      }
+    }
+
+    // ── Call Gemini ──
     const generativeModel = genAI.getGenerativeModel({
       model: 'gemini-2.5-flash',
       systemInstruction: system,
@@ -258,7 +653,17 @@ app.post('/api/generate', async (req, res) => {
     });
 
     const responseText = result.response.text();
-    res.json({ content: [{ text: responseText }] });
+
+    // ── Increment usage after successful generation ──
+    let serverUsage = null;
+    if (email && feature) {
+      serverUsage = db.incrementUsage(email, feature);
+    }
+
+    res.json({
+      content: [{ text: responseText }],
+      _serverUsage: serverUsage,
+    });
   } catch (error) {
     console.error('Gemini API Error:', error);
     res.status(500).json({ error: error.message || 'Failed to generate response' });
@@ -267,4 +672,5 @@ app.post('/api/generate', async (req, res) => {
 
 app.listen(port, () => {
   console.log(`JobFill AI Server running on port ${port}`);
+  console.log(`SQLite database at: ${require('path').join(__dirname, 'data', 'jobfill.db')}`);
 });

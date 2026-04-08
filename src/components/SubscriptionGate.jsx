@@ -1,12 +1,9 @@
-import { useState } from 'react';
 import { useSubscription } from '@/hooks/useSubscription';
-import { PLAN_LABELS, PLAN_PRICING } from '@/config/plans';
+import { PLAN_LABELS } from '@/config/plans';
 import { Crown, Loader2, Lock, ArrowUp } from 'lucide-react';
 
 export function SubscriptionGate({ children, feature, featureName }) {
-  const { isLoading, canUseFeature, openCheckout, daysUntilReset } = useSubscription();
-  const [email, setEmail] = useState('');
-  const [checkingOut, setCheckingOut] = useState(false);
+  const { isLoading, canUseFeature, openWebsite, daysUntilReset } = useSubscription();
 
   if (isLoading) {
     return (
@@ -19,17 +16,9 @@ export function SubscriptionGate({ children, feature, featureName }) {
   const check = canUseFeature(feature || 'autofill');
   if (check.allowed) return children;
 
-  const handleUpgrade = async (plan) => {
-    if (!email.trim()) return;
-    setCheckingOut(true);
-    await openCheckout(email.trim(), plan, 'monthly');
-    setCheckingOut(false);
-  };
-
   // Blocked by tier — user doesn't have the right plan
   if (check.reason === 'tier') {
     const targetPlan = check.upgradeTarget || 'pro';
-    const price = PLAN_PRICING[targetPlan];
 
     return (
       <div className="flex flex-col h-full overflow-y-auto scrollbar-custom pb-20 fade-in">
@@ -44,37 +33,21 @@ export function SubscriptionGate({ children, feature, featureName }) {
               {featureName || 'This feature'} requires {PLAN_LABELS[targetPlan]}
             </h2>
             <p className="text-sm text-indigo-200 leading-relaxed">
-              Upgrade to <span className="text-yellow-300 font-bold">{PLAN_LABELS[targetPlan]}</span> starting at{' '}
-              <span className="text-yellow-300 font-bold">${price?.monthly}/mo</span>
+              Upgrade to <span className="text-yellow-300 font-bold">{PLAN_LABELS[targetPlan]}</span> to unlock this feature.
             </p>
           </div>
         </div>
 
         <div className="px-4 py-4 space-y-3">
-          <div>
-            <label className="block text-xs text-textSecondary mb-1.5">Your email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="input-field py-2 text-sm"
-            />
-          </div>
           <button
-            onClick={() => handleUpgrade(targetPlan)}
-            disabled={checkingOut || !email.trim()}
-            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-indigo-600 hover:from-violet-600 hover:to-indigo-700 text-white font-semibold py-3 rounded-xl transition-all shadow-lg shadow-indigo-900/40 disabled:opacity-60"
+            onClick={openWebsite}
+            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-indigo-600 hover:from-violet-600 hover:to-indigo-700 text-white font-semibold py-3 rounded-xl transition-all shadow-lg shadow-indigo-900/40"
           >
-            {checkingOut ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : (
-              <Crown size={16} />
-            )}
-            {checkingOut ? 'Opening checkout...' : `Get ${PLAN_LABELS[targetPlan]} — $${price?.monthly}/mo`}
+            <Crown size={16} />
+            Upgrade to {PLAN_LABELS[targetPlan]}
           </button>
           <p className="text-center text-[11px] text-textSecondary">
-            Secure checkout via Lemon Squeezy
+            You'll be taken to our website to complete the upgrade.
           </p>
         </div>
       </div>
@@ -99,23 +72,13 @@ export function SubscriptionGate({ children, feature, featureName }) {
           {targetPlan && ` Upgrade to ${PLAN_LABELS[targetPlan]} for more.`}
         </p>
         {targetPlan && (
-          <>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="input-field py-2 text-sm w-full mb-3"
-            />
-            <button
-              onClick={() => handleUpgrade(targetPlan)}
-              disabled={checkingOut || !email.trim()}
-              className="w-full flex items-center justify-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-2.5 rounded-xl transition-all disabled:opacity-60"
-            >
-              {checkingOut ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={14} />}
-              {checkingOut ? 'Opening...' : `Upgrade to ${PLAN_LABELS[targetPlan]}`}
-            </button>
-          </>
+          <button
+            onClick={openWebsite}
+            className="w-full flex items-center justify-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-2.5 rounded-xl transition-all"
+          >
+            <ArrowUp size={14} />
+            Upgrade to {PLAN_LABELS[targetPlan]}
+          </button>
         )}
       </div>
     );

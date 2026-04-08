@@ -20,8 +20,8 @@ const defaultProfile = {
   education: ''
 };
 
-export function ProfileTab({ onNavigate }) {
-  const { plan, canUseFeature, incrementUsage, usage } = useSubscription();
+export function ProfileTab() {
+  const { plan, canUseFeature, incrementUsage, usage, userEmail, syncServerUsage, openWebsite } = useSubscription();
   const [storedProfile, setStoredProfile, loading] = useStorage('jobfill_profile', defaultProfile);
   const [resumeText] = useStorage('jobfill_resume_text', '');
   const [customFields, setCustomFields] = useStorage('jobfill_custom_fields', {});
@@ -51,7 +51,14 @@ export function ProfileTab({ onNavigate }) {
 
   const handleAutoFill = async () => {
     if (!autofillCheck.allowed) {
-      onNavigate?.('pro');
+      openWebsite();
+      return;
+    }
+
+    const email = userEmail || profile.email;
+    if (!email) {
+      setToast({ visible: true, message: 'Please add your email in the profile first.', type: 'error' });
+      setTimeout(() => setToast({ visible: false, message: '' }), 3000);
       return;
     }
 
@@ -68,7 +75,7 @@ export function ProfileTab({ onNavigate }) {
       }
 
       setToast({ visible: true, message: 'AI Mapping Fields...' });
-      const { mapping, missingFields } = await generateAutoFillMapping(profile, customFields, resumeText, scanResponse.fields);
+      const { mapping, missingFields, _serverUsage } = await generateAutoFillMapping(profile, customFields, resumeText, scanResponse.fields, email);
 
       if (missingFields && missingFields.length > 0) {
         // Enforce custom fields limit
@@ -95,7 +102,11 @@ export function ProfileTab({ onNavigate }) {
       setToast({ visible: true, message: 'Filling Form...' });
       await chrome.tabs.sendMessage(tabs[0].id, { action: 'FILL_FORM', mapping });
 
-      await incrementUsage('autofill');
+      if (_serverUsage) {
+        await syncServerUsage({ plan: undefined, usage: _serverUsage, resetDate: _serverUsage.resetDate });
+      } else {
+        await incrementUsage('autofill');
+      }
 
       setToast({ visible: true, message: 'Application Auto-Filled ✨' });
     } catch (err) {
@@ -121,7 +132,7 @@ export function ProfileTab({ onNavigate }) {
         <div className="flex gap-2">
           {showUpgradeBanner ? (
             <button
-              onClick={() => onNavigate?.('pro')}
+              onClick={openWebsite}
               className="flex items-center gap-1 bg-gradient-to-r from-yellow-500 to-orange-600 hover:from-yellow-600 hover:to-orange-700 text-white text-sm font-bold py-1.5 px-3 rounded-md transition-all shadow-lg shadow-orange-900/20 active:scale-95"
             >
               <Crown size={14} />
@@ -155,12 +166,12 @@ export function ProfileTab({ onNavigate }) {
             {autofillCheck.reason === 'limit' ? (
               <>
                 You've used all {autofillCheck.limit} auto-fills this month ({PLAN_LABELS[plan]}).{' '}
-                <button onClick={() => onNavigate?.('pro')} className="font-bold underline">Upgrade</button> for more.
+                <button onClick={openWebsite} className="font-bold underline">Upgrade</button> for more.
               </>
             ) : (
               <>
                 You've used your 3 free fills!{' '}
-                <button onClick={() => onNavigate?.('pro')} className="font-bold underline">Choose a plan</button> to continue.
+                <button onClick={openWebsite} className="font-bold underline">Choose a plan</button> to continue.
               </>
             )}
           </p>
@@ -233,7 +244,7 @@ export function ProfileTab({ onNavigate }) {
           <div className="space-y-3">
             <div>
               <label className="block text-xs text-textSecondary mb-1">Work Experience</label>
-              <textarea name="workExperience" value={profile.workExperience} onChange={handleChange} rows={4} placeholder="Company — Role (Dates)\nDescription..." className="input-field text-sm font-sans" />
+              <textarea name="workExperience" value={profile.workExperience} onChange={handleChange} rows={4} placeholder={"Company \u2014 Role (Dates)\nDescription..."} className="input-field text-sm font-sans" />
             </div>
             <div>
               <label className="block text-xs text-textSecondary mb-1">Education</label>
